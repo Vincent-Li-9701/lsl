@@ -249,6 +249,8 @@ if __name__ == "__main__":
     train_vocab_size = train_dataset.vocab_size
     train_max_length = train_dataset.max_length
     train_w2i, train_i2w = train_vocab['w2i'], train_vocab['i2w']
+    caption_filter = train_dataset.caption_filter
+
     pad_index = train_w2i[PAD_TOKEN]
     sos_index = train_w2i[SOS_TOKEN]
     eos_index = train_w2i[EOS_TOKEN]
@@ -264,7 +266,10 @@ if __name__ == "__main__":
                              noise=test_noise,
                              class_noise_weight=0.0,
                              noise_type=args.noise_type,
-                             data_dir=args.data_dir)
+                             data_dir=args.data_dir,
+                             caption_filter=caption_filter,
+                             caption_filter_mode=1)
+
     test_dataset = ShapeWorld(split='test',
                               precomputed_features=precomputed_features,
                               vocab=train_vocab,
@@ -272,7 +277,9 @@ if __name__ == "__main__":
                               noise=test_noise,
                               class_noise_weight=0.0,
                               noise_type=args.noise_type,
-                              data_dir=args.data_dir)
+                              data_dir=args.data_dir,
+                              caption_filter=caption_filter,
+                              caption_filter_mode=1)
     try:
         val_same_dataset = ShapeWorld(
             split='val_same',
@@ -282,7 +289,9 @@ if __name__ == "__main__":
             noise=test_noise,
             class_noise_weight=0.0,
             noise_type=args.noise_type,
-            data_dir=args.data_dir)
+            data_dir=args.data_dir,
+            caption_filter=caption_filter,
+            caption_filter_mode=1)
         test_same_dataset = ShapeWorld(
             split='test_same',
             precomputed_features=precomputed_features,
@@ -291,7 +300,9 @@ if __name__ == "__main__":
             noise=test_noise,
             class_noise_weight=0.0,
             noise_type=args.noise_type,
-            data_dir=args.data_dir)
+            data_dir=args.data_dir,
+            caption_filter=caption_filter,
+            caption_filter_mode=1)
         has_same = True
     except RuntimeError:
         has_same = False
@@ -503,6 +514,7 @@ if __name__ == "__main__":
                 multimodal_model.eval()
 
         accuracy_meter = AverageMeter(raw=True)
+        accuracy_meter.reset()
         data_loader = data_loader_dict[split]
 
         with torch.no_grad():

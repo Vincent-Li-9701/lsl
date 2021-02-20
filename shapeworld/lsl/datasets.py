@@ -13,8 +13,9 @@ from torchvision import transforms
 
 from utils import next_random, OrderedCounter
 
+
 # Set your data directory here!
-DATA_DIR = '/u/scr/muj/shapeworld_4k'
+DATA_DIR = '/Users/qinziyuexu/Documents/CS224N/lsl/shapeworld'
 SPLIT_OPTIONS = ['train', 'val', 'test', 'val_same', 'test_same']
 
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -129,6 +130,10 @@ class ShapeWorld(data.Dataset):
     @param class_noise_weight: how much of the noise added to examples should
                                be the same across (pos/neg classes) (between
                                0.0 and 1.0)
+    @param caption_filter: a set contains all captions in training set if provided
+    @param caption_filter_mode: if 0: no caption filtering,
+                                   1: only include captions in caption_filter,
+                                   2: only include captions NOT in caption_filter
 
     NOTE: for now noise/class_noise_weight has no impact on val/test datasets
     """
@@ -148,7 +153,9 @@ class ShapeWorld(data.Dataset):
                  data_dir=None,
                  language_filter=None,
                  shuffle_words=False,
-                 shuffle_captions=False):
+                 shuffle_captions=False,
+                 caption_filter=None,
+                 caption_filter_mode=0):
         super(ShapeWorld, self).__init__()
         self.split = split
         assert self.split in SPLIT_OPTIONS
@@ -218,6 +225,31 @@ class ShapeWorld(data.Dataset):
         ex_features = np.load(os.path.join(split_dir, ex_features_name))['arr_0']
         with open(os.path.join(split_dir, 'hints.json')) as fp:
             hints = json.load(fp)
+
+
+        if split == 'train':
+            #create caption_filter which will be used by val\test dataset
+            print("len of training set is " + str(len(hints)))
+            self.caption_filter = set(hints)
+            print("there are " + str(len(self.caption_filter)) + " unique captions in training set")
+        else:
+
+            print("len of caption filter is " + str(len(caption_filter)))
+            print("len of data set is " + str(len(hints)))
+            print("len of data set is " + str(len(in_features)))
+            if caption_filter_mode == 0:
+                pass
+            elif caption_filter_mode == 1:
+                labels = [labels[i] for i in range(len(hints)) if hints[i] in caption_filter]
+                in_features = [in_features[i] for i in range(len(hints)) if hints[i] in caption_filter]
+                ex_features = [ex_features[i] for i in range(len(hints)) if hints[i] in caption_filter]
+                hints = [hints[i] for i in range(len(hints)) if hints[i] in caption_filter]
+            else:
+                labels = [labels[i] for i in range(len(hints)) if hints[i] not in caption_filter]
+                in_features = [in_features[i] for i in range(len(hints)) if hints[i] not in caption_filter]
+                ex_features = [ex_features[i] for i in range(len(hints)) if hints[i] not in caption_filter]
+                hints = [hints[i] for i in range(len(hints)) if hints[i] not in caption_filter]
+            print("len of filtered tasks is " + str(len(hints)))
 
         test_hints = os.path.join(split_dir, 'test_hints.json')
         if self.fixed_noise_colors is not None:
