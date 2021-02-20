@@ -266,9 +266,7 @@ if __name__ == "__main__":
                              noise=test_noise,
                              class_noise_weight=0.0,
                              noise_type=args.noise_type,
-                             data_dir=args.data_dir,
-                             caption_filter=caption_filter,
-                             caption_filter_mode=1)
+                             data_dir=args.data_dir)
 
     test_dataset = ShapeWorld(split='test',
                               precomputed_features=precomputed_features,
@@ -277,9 +275,7 @@ if __name__ == "__main__":
                               noise=test_noise,
                               class_noise_weight=0.0,
                               noise_type=args.noise_type,
-                              data_dir=args.data_dir,
-                              caption_filter=caption_filter,
-                              caption_filter_mode=1)
+                              data_dir=args.data_dir)
     try:
         val_same_dataset = ShapeWorld(
             split='val_same',

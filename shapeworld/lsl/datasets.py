@@ -233,23 +233,24 @@ class ShapeWorld(data.Dataset):
             self.caption_filter = set(hints)
             print("there are " + str(len(self.caption_filter)) + " unique captions in training set")
         else:
-
-            print("len of caption filter is " + str(len(caption_filter)))
-            print("len of data set is " + str(len(hints)))
-            print("len of data set is " + str(len(in_features)))
             if caption_filter_mode == 0:
                 pass
             elif caption_filter_mode == 1:
+                print("len of caption filter is " + str(len(caption_filter)))
+                print("len of data set is " + str(len(hints)))
                 labels = [labels[i] for i in range(len(hints)) if hints[i] in caption_filter]
                 in_features = [in_features[i] for i in range(len(hints)) if hints[i] in caption_filter]
                 ex_features = [ex_features[i] for i in range(len(hints)) if hints[i] in caption_filter]
                 hints = [hints[i] for i in range(len(hints)) if hints[i] in caption_filter]
+                print("len of filtered tasks is " + str(len(hints)))
             else:
+                print("len of caption filter is " + str(len(caption_filter)))
+                print("len of data set is " + str(len(hints)))
                 labels = [labels[i] for i in range(len(hints)) if hints[i] not in caption_filter]
                 in_features = [in_features[i] for i in range(len(hints)) if hints[i] not in caption_filter]
                 ex_features = [ex_features[i] for i in range(len(hints)) if hints[i] not in caption_filter]
                 hints = [hints[i] for i in range(len(hints)) if hints[i] not in caption_filter]
-            print("len of filtered tasks is " + str(len(hints)))
+                print("len of filtered tasks is " + str(len(hints)))
 
         test_hints = os.path.join(split_dir, 'test_hints.json')
         if self.fixed_noise_colors is not None:
