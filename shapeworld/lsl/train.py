@@ -414,6 +414,19 @@ if __name__ == "__main__":
             if args.infer_hyp:
                 # Use hypothesis to compute prediction loss
                 # (how well does true hint match image repr)?
+                #scheduled sampling
+                use_truth_prob = max(0.1, 1 - batch_idx / n_steps)
+                use_truth = np.random.choice([1,0], [use_truth_prob, 1 - use_truth_prob])
+                if not use_truth:
+                    hint_seq, hint_length = proposal_model.sample(
+                        examples_rep_mean,
+                        sos_index,
+                        eos_index,
+                        pad_index,
+                        greedy=j == 0)
+                    hint_seq = hint_seq.to(device)
+                    hint_length = hint_length.to(device)
+
                 hint_rep = hint_model(hint_seq, hint_length)
                 if args.multimodal_concept:
                     hint_rep = multimodal_model(hint_rep, examples_rep_mean)
