@@ -415,24 +415,26 @@ if __name__ == "__main__":
                 # Use hypothesis to compute prediction loss
                 # (how well does true hint match image repr)?
                 #scheduled sampling
-                use_truth_prob = max(0.1, 1 - batch_idx / n_steps)
-                use_truth = np.random.choice([1,0], [use_truth_prob, 1 - use_truth_prob])
+                #use_truth_prob = 0
+                use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1))/ n_steps / args.epochs
+                use_truth = np.random.choice(a=[True,False], p=[use_truth_prob, 1 - use_truth_prob])
                 if not use_truth:
+                    #print("sample to be true for iter " + str(batch_idx))
                     hint_seq, hint_length = proposal_model.sample(
                         examples_rep_mean,
                         sos_index,
                         eos_index,
                         pad_index,
-                        greedy=j == 0)
+                        greedy=True)
                     hint_seq = hint_seq.to(device)
                     hint_length = hint_length.to(device)
 
                 hint_rep = hint_model(hint_seq, hint_length)
+                
                 if args.multimodal_concept:
                     hint_rep = multimodal_model(hint_rep, examples_rep_mean)
 
                 score = scorer_model.score(hint_rep, image_rep)
-
                 if args.poe:
                     image_score = scorer_model.score(examples_rep_mean,
                                                      image_rep)
@@ -700,7 +702,7 @@ if __name__ == "__main__":
         test_acc_ci = 1.96 * np.std(all_test_raw_scores) / np.sqrt(n_test)
 
         epoch_acc = (val_acc + val_same_acc) / 2
-        is_best_epoch = epoch_acc > best_val_acc
+        is_best_epoch = epoch_acc > (best_val_acc + best_val_same_acc) / 2
         if is_best_epoch:
             best_epoch = epoch
             best_epoch_acc = epoch_acc
