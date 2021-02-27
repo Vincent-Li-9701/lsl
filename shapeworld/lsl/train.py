@@ -415,21 +415,27 @@ if __name__ == "__main__":
                 # Use hypothesis to compute prediction loss
                 # (how well does true hint match image repr)?
                 #scheduled sampling
-                #use_truth_prob = 0
-                use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1))/ n_steps / args.epochs
+                #use_truth_prob = 1
+                #use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1))/ n_steps / args.epochs
+                k = args.epochs / 4
+                use_truth_prob = k / (k + np.exp(epoch/k))
+                
                 use_truth = np.random.choice(a=[True,False], p=[use_truth_prob, 1 - use_truth_prob])
                 if not use_truth:
+                    #print(use_truth_prob)
                     #print("sample to be true for iter " + str(batch_idx))
-                    hint_seq, hint_length = proposal_model.sample(
+                    hint_modified_seq, hint_m_length = proposal_model.sample_modified(
                         examples_rep_mean,
                         sos_index,
                         eos_index,
                         pad_index,
-                        greedy=True)
-                    hint_seq = hint_seq.to(device)
-                    hint_length = hint_length.to(device)
+                        greedy=False)
+                    hint_modified_seq = hint_modified_seq.to(device)
+                    hint_modified_length = hint_m_length.to(device)
+                    hint_rep = hint_model(hint_modified_seq, hint_modified_length)
 
-                hint_rep = hint_model(hint_seq, hint_length)
+                else:
+                    hint_rep = hint_model(hint_seq, hint_length)
                 
                 if args.multimodal_concept:
                     hint_rep = multimodal_model(hint_rep, examples_rep_mean)
@@ -472,13 +478,15 @@ if __name__ == "__main__":
                     # Decode images/examples to hints
                     hypo_out = proposal_model(hyp_source_rep, hint_seq,
                                               hint_length)
+                    #assert False
+                    #hypo_out = proposal_model.scheduled_sampling(hyp_source_rep,hint_seq, max_hint_length, sos_index, (batch_idx + 1) + n_steps * (epoch - 1), n_steps*args.epochs, greedy = True)
                     seq_len = hint_seq.size(1)
                     hypo_out = hypo_out[:, :-1].contiguous()
                     hint_seq = hint_seq[:, 1:].contiguous()
-
                     hypo_out_2d = hypo_out.view(hyp_batch_size * (seq_len - 1),
                                                 train_vocab_size)
                     hint_seq_2d = hint_seq.long().view(hyp_batch_size * (seq_len - 1))
+
                     hypo_loss = F.cross_entropy(hypo_out_2d,
                                                 hint_seq_2d,
                                                 reduction='none')
@@ -762,3 +770,6 @@ if __name__ == "__main__":
     print('====> {:>17}\tEpoch: {}\tAccuracy: {:.4f}'.format(
         '(best_test_avg)', best_epoch,
         (best_test_acc + best_test_same_acc) / 2))
+    print('====> {:>17}\tEpoch: {}\tAccuracy CI: {:.4f}'.format(
+        '(best_test_acc_ci)', best_epoch,
+        best_test_acc_ci))

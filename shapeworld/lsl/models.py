@@ -209,10 +209,8 @@ class TextProposal(nn.Module):
         feats = feats.unsqueeze(0)
         # reorder from (B,L,D) to (L,B,D)
         seq = seq.transpose(0, 1)
-
         # embed your sequences
         embed_seq = self.embedding(seq)
-
         packed_input = rnn_utils.pack_padded_sequence(embed_seq,
                                                       sorted_lengths.cpu())
 
@@ -232,7 +230,6 @@ class TextProposal(nn.Module):
         output_2d = output.view(batch_size * max_length, 512)
         outputs_2d = self.outputs2vocab(output_2d)
         outputs = outputs_2d.view(batch_size, max_length, self.vocab_size)
-
         return outputs
 
     def sample(self, feats, sos_index, eos_index, pad_index, greedy=False):
@@ -258,7 +255,6 @@ class TextProposal(nn.Module):
 
             # compute embeddings
             inputs = self.embedding(inputs)
-
             for i in range(20):  # like in jacobs repo
                 outputs, states = self.gru(inputs,
                                            states)  # outputs: (L=1,B,H)
@@ -296,6 +292,118 @@ class TextProposal(nn.Module):
 
         return sampled_ids, sampled_lengths
 
+
+    def sample_modified(self, feats, sos_index, eos_index, pad_index, greedy=False):
+        batch_size = feats.size(0)
+
+        # initialize hidden states using image features
+        states = feats.unsqueeze(0)
+
+        # first input is SOS token
+        inputs = np.array([sos_index for _ in range(batch_size)])
+        inputs = torch.from_numpy(inputs)
+        inputs = inputs.unsqueeze(1)
+        inputs = inputs.to(feats.device)
+
+        # save SOS as first generated token
+        inputs_npy = inputs.squeeze(1).cpu().numpy()
+        sampled_ids = [[w] for w in inputs_npy]
+
+        # (B,L,D) to (L,B,D)
+        inputs = inputs.transpose(0, 1)
+
+        # compute embeddings
+        inputs = self.embedding(inputs)
+        for i in range(20):  # like in jacobs repo
+            outputs, states = self.gru(inputs,
+                                           states)  # outputs: (L=1,B,H)
+            outputs = outputs.squeeze(0)  # outputs: (B,H)
+            outputs = self.outputs2vocab(outputs)  # outputs: (B,V)
+
+            if greedy:
+                predicted = outputs.max(1)[1]
+                predicted = predicted.unsqueeze(1)
+            else:
+                outputs = F.softmax(outputs, dim=1)
+                predicted = torch.multinomial(outputs, 1)
+
+            predicted_npy = predicted.squeeze(1).cpu().numpy()
+            predicted_lst = predicted_npy.tolist()
+
+            for w, so_far in zip(predicted_lst, sampled_ids):
+                if so_far[-1] != eos_index:
+                    so_far.append(w)
+
+            inputs = predicted.transpose(0, 1)  # inputs: (L=1,B)
+            inputs = self.embedding(inputs)  # inputs: (L=1,B,E)
+
+        sampled_lengths = [len(text) for text in sampled_ids]
+        sampled_lengths = np.array(sampled_lengths)
+
+        max_length = max(sampled_lengths)
+        padded_ids = np.ones((batch_size, max_length)) * pad_index
+
+        for i in range(batch_size):
+            padded_ids[i, :sampled_lengths[i]] = sampled_ids[i]
+
+        sampled_lengths = torch.from_numpy(sampled_lengths).long()
+        sampled_ids = torch.from_numpy(padded_ids).long()
+        return sampled_ids, sampled_lengths
+
+
+
+    def scheduled_sampling(self, feats, seq, length, sos_index, iteration, total_iteration, greedy = True):
+        batch_size = feats.size(0)
+
+        # initialize hidden states using image features
+        states = feats.unsqueeze(0)
+
+        # first input is SOS token
+        inputs = np.array([sos_index for _ in range(batch_size)])
+        inputs = torch.from_numpy(inputs)
+        inputs = inputs.unsqueeze(1)
+        inputs = inputs.to(feats.device)
+
+        # save SOS as first generated token
+        inputs_npy = inputs.squeeze(1).cpu().numpy()
+        sampled_ids = [[w] for w in inputs_npy]
+
+        # (B,L,D) to (L,B,D)
+        inputs = inputs.transpose(0, 1)
+
+        # compute embeddings
+        inputs = self.embedding(inputs) #1, 100, 512
+
+        output_collection = None
+        for i in range(length):
+            outputs, states = self.gru(inputs,states)  # outputs: (L=1,B,H)
+            outputs = outputs.squeeze(0)  # outputs: (B,H)
+            outputs = self.outputs2vocab(outputs)  # outputs: (B,V) 100, vocab_size
+
+            output_collect = torch.unsqueeze(outputs.contiguous(), 0) #1, B, V
+            if output_collection == None:
+                output_collection = output_collect
+            else:
+                output_collection = torch.cat((output_collection, output_collect)) #14, B, V
+
+            if greedy:
+                predicted = outputs.max(1)[1]
+                predicted = predicted.unsqueeze(1)
+            else:
+                outputs = F.softmax(outputs, dim=1)
+                predicted = torch.multinomial(outputs, 1) # 100, 1
+
+            inputs = predicted.transpose(0, 1)  # inputs: (L=1,B) 1, 100
+
+            use_truth_prob = 1 - iteration / total_iteration
+            use_truth = np.random.choice([True, False], p = [use_truth_prob, 1 - use_truth_prob])
+            if use_truth:
+                inputs = seq[:,i].contiguous() #100
+                inputs = inputs.unsqueeze(0) #1, 100
+                inputs = inputs.to(feats.device)
+            inputs = self.embedding(inputs)  # inputs: (L=1,B,E) 1, 100, 512
+
+        return output_collection.transpose(0, 1)
 
 class EmbedImageRep(nn.Module):
     def __init__(self, z_dim):
