@@ -350,61 +350,6 @@ class TextProposal(nn.Module):
         sampled_ids = torch.from_numpy(padded_ids).long()
         return sampled_ids, sampled_lengths
 
-
-
-    def scheduled_sampling(self, feats, seq, length, sos_index, iteration, total_iteration, greedy = True):
-        batch_size = feats.size(0)
-
-        # initialize hidden states using image features
-        states = feats.unsqueeze(0)
-
-        # first input is SOS token
-        inputs = np.array([sos_index for _ in range(batch_size)])
-        inputs = torch.from_numpy(inputs)
-        inputs = inputs.unsqueeze(1)
-        inputs = inputs.to(feats.device)
-
-        # save SOS as first generated token
-        inputs_npy = inputs.squeeze(1).cpu().numpy()
-        sampled_ids = [[w] for w in inputs_npy]
-
-        # (B,L,D) to (L,B,D)
-        inputs = inputs.transpose(0, 1)
-
-        # compute embeddings
-        inputs = self.embedding(inputs) #1, 100, 512
-
-        output_collection = None
-        for i in range(length):
-            outputs, states = self.gru(inputs,states)  # outputs: (L=1,B,H)
-            outputs = outputs.squeeze(0)  # outputs: (B,H)
-            outputs = self.outputs2vocab(outputs)  # outputs: (B,V) 100, vocab_size
-
-            output_collect = torch.unsqueeze(outputs.contiguous(), 0) #1, B, V
-            if output_collection == None:
-                output_collection = output_collect
-            else:
-                output_collection = torch.cat((output_collection, output_collect)) #14, B, V
-
-            if greedy:
-                predicted = outputs.max(1)[1]
-                predicted = predicted.unsqueeze(1)
-            else:
-                outputs = F.softmax(outputs, dim=1)
-                predicted = torch.multinomial(outputs, 1) # 100, 1
-
-            inputs = predicted.transpose(0, 1)  # inputs: (L=1,B) 1, 100
-
-            use_truth_prob = 1 - iteration / total_iteration
-            use_truth = np.random.choice([True, False], p = [use_truth_prob, 1 - use_truth_prob])
-            if use_truth:
-                inputs = seq[:,i].contiguous() #100
-                inputs = inputs.unsqueeze(0) #1, 100
-                inputs = inputs.to(feats.device)
-            inputs = self.embedding(inputs)  # inputs: (L=1,B,E) 1, 100, 512
-
-        return output_collection.transpose(0, 1)
-
 class EmbedImageRep(nn.Module):
     def __init__(self, z_dim):
         super(EmbedImageRep, self).__init__()

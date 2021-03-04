@@ -416,9 +416,9 @@ if __name__ == "__main__":
                 # (how well does true hint match image repr)?
                 #scheduled sampling
                 #use_truth_prob = 1
-                #use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1))/ n_steps / args.epochs
-                k = args.epochs / 4
-                use_truth_prob = k / (k + np.exp(epoch/k))
+                use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1))/ n_steps / args.epochs
+                #k = 15
+                #use_truth_prob = k / (k + np.exp(epoch/k))
                 
                 use_truth = np.random.choice(a=[True,False], p=[use_truth_prob, 1 - use_truth_prob])
                 if not use_truth:
@@ -478,8 +478,6 @@ if __name__ == "__main__":
                     # Decode images/examples to hints
                     hypo_out = proposal_model(hyp_source_rep, hint_seq,
                                               hint_length)
-                    #assert False
-                    #hypo_out = proposal_model.scheduled_sampling(hyp_source_rep,hint_seq, max_hint_length, sos_index, (batch_idx + 1) + n_steps * (epoch - 1), n_steps*args.epochs, greedy = True)
                     seq_len = hint_seq.size(1)
                     hypo_out = hypo_out[:, :-1].contiguous()
                     hint_seq = hint_seq[:, 1:].contiguous()
