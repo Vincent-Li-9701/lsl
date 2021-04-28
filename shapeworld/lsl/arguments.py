@@ -167,8 +167,8 @@ class ArgumentParser:
     def parse_args(self):
         args = self.parser.parse_args()
 
-        if args.oracle and not args.infer_hyp:
-            self.parser.error("Must specify --infer_hyp to use --oracle")
+        #if args.oracle and not args.infer_hyp:
+        #    self.parser.error("Must specify --infer_hyp to use --oracle")
 
         if args.hint_retriever and not args.infer_hyp:
             self.parser.error("Must specify --infer_hyp to use --hint_retriever")
@@ -183,7 +183,7 @@ class ArgumentParser:
             raise NotImplementedError
         
         args.predict_hyp = args.predict_concept_hyp or args.predict_image_hyp
-        args.use_hyp = args.predict_hyp or args.infer_hyp
+        args.use_hyp = True #args.predict_hyp or args.infer_hyp
         args.encode_hyp = args.infer_hyp or (args.predict_hyp and args.predict_hyp_task == 'embed')
         args.decode_hyp = args.infer_hyp or (args.predict_hyp and args.predict_hyp_task == 'generate')
 

@@ -9,7 +9,6 @@ from collections import defaultdict
 from sklearn.metrics import accuracy_score, recall_score, precision_score
 from torchtext.data.metrics import bleu_score
 import wandb
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -175,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(train_vocab_size, 768, 9408, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 9408, 4, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -232,7 +231,8 @@ if __name__ == "__main__":
     optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
 
     # initialize weight and bias
-    wandb.init(project='lsl', entity='bhy070418s')
+    #wandb.init(project='lsl', entity='bhy070418s')
+    wandb.init(project='easton_dev', entity='lsl')
     config = wandb.config
     config.learning_rate = args.lr
 
@@ -251,7 +251,7 @@ if __name__ == "__main__":
         loss_total = 0
         pbar = tqdm(total=n_steps)
         for batch_idx in range(n_steps):
-            examples, image, label, hint_seq, hint_length, *rest = \
+            examples, image, label, hint_seq, hint_length, hint_string, *rest = \
                 train_dataset.sample_train(args.batch_size)
 
             examples = examples.to(device)
@@ -259,104 +259,28 @@ if __name__ == "__main__":
             label = label.to(device)
             batch_size = len(image)
             n_ex = examples.shape[1]
-
-            if args.use_hyp:
-                # Load hint
-                hint_seq = hint_seq.to(device)
-                hint_length = hint_length.to(device)
-                max_hint_length = hint_length.max().item()
-                # Cap max length if it doesn't fill out the tensor
-                if max_hint_length != hint_seq.shape[1]:
-                    hint_seq = hint_seq[:, :max_hint_length]
+            hint_seq = hint_seq.to(device)
+            #if args.use_hyp:
+            #    # Load hint
+            #    hint_seq = hint_seq.to(device)
+            #    hint_length = hint_length.to(device)
+            #    max_hint_length = hint_length.max().item()
+            #    # Cap max length if it doesn't fill out the tensor
+            #    if max_hint_length != hint_seq.shape[1]:
+            #        hint_seq = hint_seq[:, :max_hint_length]
 
             # Learn representations of images and examples
+            hint_string = hint_string.to(device)
             image_rep = image_model(image)
-            examples_rep = image_model(examples)
+            examples_rep = image_model(examples, input_ids=hint_string)
             examples_rep_mean = torch.mean(examples_rep, dim=1)
-            
-            # Prediction loss
-            if args.infer_hyp:
-                # Use hypothesis to compute prediction loss
-                # (how well does true hint match image repr)?
-                if args.scheduled_sampling:
-                    use_truth_prob = 1 - ((batch_idx + 1) + n_steps * (epoch - 1)) / n_steps / args.epochs
+            # Use concept to compute prediction loss
+            # (how well does example repr match image repr)?
+            score = scorer_model.score(examples_rep_mean, image_rep)
+            pred_loss = F.binary_cross_entropy_with_logits(
+                score, label.float())
 
-                    use_truth = np.random.choice(a=[True, False], p=[use_truth_prob, 1 - use_truth_prob])
-                    if not use_truth:
-                        hint_modified_seq, hint_modified_length = proposal_model.sample(
-                            examples_rep_mean,
-                            sos_index,
-                            eos_index,
-                            pad_index,
-                            greedy=False)
-                        hint_modified_seq = hint_modified_seq.to(device)
-                        hint_modified_length = hint_modified_length.to(device)
-                        hint_rep = hint_model(hint_modified_seq, hint_modified_length)
-                    else:
-                        hint_rep = hint_model(hint_seq, hint_length)
-
-                else:
-                    hint_rep = hint_model(hint_seq, hint_length)
-
-                if args.multimodal_concept:
-                    hint_rep = multimodal_model(hint_rep, examples_rep_mean)
-
-                score = scorer_model.score(hint_rep, image_rep)
-
-                if args.poe:
-                    image_score = scorer_model.score(examples_rep_mean,
-                                                     image_rep)
-                    score = score + image_score
-                pred_loss = F.binary_cross_entropy_with_logits(
-                    score, label.float())
-            else:
-                # Use concept to compute prediction loss
-                # (how well does example repr match image repr)?
-                score = scorer_model.score(examples_rep_mean, image_rep)
-                pred_loss = F.binary_cross_entropy_with_logits(
-                    score, label.float())
-
-            # Hypothesis loss
-            if args.use_hyp:
-                # How plausible is the true hint under example/image rep?
-                if args.predict_image_hyp:
-                    # Use raw images, flatten out tasks
-                    hyp_batch_size = batch_size * n_ex
-                    hyp_source_rep = examples_rep.view(hyp_batch_size, -1)
-                    hint_seq = hint_seq.unsqueeze(1).repeat(1, n_ex, 1).view(
-                        hyp_batch_size, -1)
-                    hint_length = hint_length.unsqueeze(1).repeat(
-                        1, n_ex).view(hyp_batch_size)
-                else:
-                    hyp_source_rep = examples_rep_mean
-                    hyp_batch_size = batch_size
-
-                if args.predict_hyp and args.predict_hyp_task == 'embed':
-                    # Encode hints, minimize distance between hint and images/examples
-                    hint_rep = hint_model(hint_seq, hint_length)
-                    dists = torch.norm(hyp_source_rep - hint_rep, p=2, dim=1)
-                    hypo_loss = torch.mean(dists)
-                else:
-                    # Decode images/examples to hints
-                    hypo_out = proposal_model(hyp_source_rep, hint_seq,
-                                              hint_length)
-                    seq_len = hint_seq.size(1)
-                    hypo_out = hypo_out[:, :-1].contiguous()
-                    hint_seq = hint_seq[:, 1:].contiguous()
-
-                    hypo_out_2d = hypo_out.view(hyp_batch_size * (seq_len - 1),
-                                                train_vocab_size)
-                    hint_seq_2d = hint_seq.long().view(hyp_batch_size * (seq_len - 1))
-                    hypo_loss = F.cross_entropy(hypo_out_2d,
-                                                hint_seq_2d,
-                                                reduction='none')
-                    hypo_loss = hypo_loss.view(hyp_batch_size, (seq_len - 1))
-                    hypo_loss = torch.mean(torch.sum(hypo_loss, dim=1))
-
-                loss = args.pred_lambda * pred_loss + args.hypo_lambda * hypo_loss
-            else:
-                loss = pred_loss
-
+            loss = pred_loss
             loss_total += loss.item()
 
             optimizer.zero_grad()
@@ -397,11 +321,10 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             idx = 0
-            for examples, image, label, hint_seq, hint_length, *rest in data_loader:
+            for examples, image, label, hint_seq, hint_length, hint_string,  *rest in data_loader:
                 if idx > len(data_loader) // 2:
                     break
                 idx += 1
-                
                 examples = examples.to(device)
                 image = image.to(device)
                 label = label.to(device)
@@ -410,108 +333,28 @@ if __name__ == "__main__":
 
                 image_rep = image_model(image)
 
-                if not args.oracle or args.multimodal_concept or args.poe:
-                    # Compute example representation
-                    examples_rep = image_model(examples)
-                    examples_rep_mean = torch.mean(examples_rep, dim=1)
-
-                if args.hint_retriever:
-                    # retrieve the hint representation of the closest concept
-                    closest_neighbor_idx = gen_retriever(args.hint_retriever)(examples_rep_mean, hint_rep_dict[0]) 
-
-                    # calculating retrival accuracy
-                    raw_scores = torch.prod(torch.eq(hint_rep_dict[1][closest_neighbor_idx], hint_seq.cuda()).float(), dim=1)
-                    retrival_acc = torch.mean(raw_scores)
-                    retrival_acc_meter.update(retrival_acc, batch_size, raw_scores=(raw_scores))
-
-                if args.poe:
-                    # Compute support image -> query image scores
-                    image_score = scorer_model.score(examples_rep_mean,
-                                                     image_rep)
-
-                if args.infer_hyp:
-                    # Hypothesize text from examples
-                    # Pick the best caption based on how well it describes concepts
-                    best_predictions = np.zeros(batch_size, dtype=np.uint8)
-                    best_hint_scores = np.full(batch_size,
-                                               -np.inf,
-                                               dtype=np.float32)
-
-                    support_hint = hint_seq
-                    for j in range(args.n_infer):
-                        # Decode greedily for first hyp; otherwise sample
-                        # If --oracle, hint_seq/hint_length is given
-                        if args.hint_retriever:
-                            hint_seq = hint_rep_dict[1][closest_neighbor_idx]
-                            hint_length = hint_rep_dict[2][closest_neighbor_idx]
-                        elif not args.oracle:
-                            hint_seq, hint_length = proposal_model.sample(
-                                examples_rep_mean,
-                                sos_index,
-                                eos_index,
-                                pad_index,
-                                greedy=j == 0)
-                        elif args.oracle:
-                            pass
-                        else:
-                            raise RuntimeError("Should not reach here")
-                        
-                        # Only generate hint if not using retrieval 
-                        hint_seq = hint_seq.to(device)
-                        hint_length = hint_length.to(device)
-                        hint_rep = hint_model(hint_seq, hint_length)
-
-                        # Compute how well this hint describes the 4 concepts.
-                        if not args.oracle:
-                            hint_scores = scorer_model.batchwise_score(
-                                hint_rep, examples_rep)
-                            hint_scores = hint_scores.cpu().numpy()
-
-                        # Compute prediction for this hint
-                        if args.multimodal_concept:
-                            hint_rep = multimodal_model(
-                                hint_rep, examples_rep_mean)
-                        score = scorer_model.score(hint_rep, image_rep)
-
-                        if args.poe:
-                            # Average with image score
-                            score = score + image_score
-                        label_hat = score > 0
-                        label_hat = label_hat.cpu().numpy()
-
-                        # Update scores and predictions for best running hints
-                        if not args.oracle and not args.hint_retriever:
-                            updates = hint_scores > best_hint_scores
-                            best_hint_scores = np.where(
-                                updates, hint_scores, best_hint_scores)
-                            best_predictions = np.where(
-                                updates, label_hat, best_predictions)
-                        else:
-                            best_predictions = label_hat
-                    hint_seq = idx2word(hint_seq, data_loader.dataset.i2w, remove_pad=True)
-                    support_hint = idx2word(support_hint, data_loader.dataset.i2w, remove_pad=True, target=True)
-                    bleu_n4 = bleu_score(hint_seq, support_hint, max_n=4, weights=[0.0, 0.0, 0.0, 1.0])
-                    bleu_meter_n4.update(bleu_n4, batch_size, raw_scores=[bleu_n4])
-                    bleu_n3 = bleu_score(hint_seq, support_hint,  max_n=3, weights=[0.0, 0.0, 1.0])
-                    bleu_meter_n3.update(bleu_n3, batch_size, raw_scores=[bleu_n3])
-                    bleu_n2 = bleu_score(hint_seq, support_hint, max_n=2, weights=[0, 1.0])
-                    bleu_meter_n2.update(bleu_n2, batch_size, raw_scores=[bleu_n2])
-                    bleu_n1 = bleu_score(hint_seq, support_hint, max_n=1, weights=[1.0])
-                    bleu_meter_n1.update(bleu_n1, batch_size, raw_scores=[bleu_n1])
-                    accuracy = accuracy_score(label_np, best_predictions)
-                    precision = precision_score(label_np, best_predictions)
-                    recall = recall_score(label_np, best_predictions)
-                else:
-                    # Compare image directly to example rep
-                    score = scorer_model.score(examples_rep_mean, image_rep)
-
-                    label_hat = score > 0
-                    label_hat = label_hat.cpu().numpy()
-
-                    accuracy = accuracy_score(label_np, label_hat)
-                    precision = precision_score(label_np, label_hat)
-                    recall = recall_score(label_np, label_hat)
-
+                hint_seq = hint_seq.to(device)
+                hint_string = hint_string.to(device)
+                examples_rep = image_model(examples, input_ids=hint_string)
+                examples_rep_mean = torch.mean(examples_rep, dim=1) 
+                # Compare image directly to example rep
+                score = scorer_model.score(examples_rep_mean, image_rep)
+                label_hat = score > 0
+                label_hat = label_hat.cpu().numpy()
+                support_hint = hint_seq
+                hint_seq = idx2word(hint_seq, data_loader.dataset.i2w, remove_pad=True)
+                support_hint = idx2word(support_hint, data_loader.dataset.i2w, remove_pad=True, target=True)
+                bleu_n4 = bleu_score(hint_seq, support_hint, max_n=4, weights=[0.0, 0.0, 0.0, 1.0])
+                bleu_meter_n4.update(bleu_n4, batch_size, raw_scores=[bleu_n4])
+                bleu_n3 = bleu_score(hint_seq, support_hint,  max_n=3, weights=[0.0, 0.0, 1.0])
+                bleu_meter_n3.update(bleu_n3, batch_size, raw_scores=[bleu_n3])
+                bleu_n2 = bleu_score(hint_seq, support_hint, max_n=2, weights=[0, 1.0])
+                bleu_meter_n2.update(bleu_n2, batch_size, raw_scores=[bleu_n2])
+                bleu_n1 = bleu_score(hint_seq, support_hint, max_n=1, weights=[1.0])
+                bleu_meter_n1.update(bleu_n1, batch_size, raw_scores=[bleu_n1])
+                accuracy = accuracy_score(label_np, label_hat)
+                precision = precision_score(label_np, label_hat, zero_division=0)
+                recall = recall_score(label_np, label_hat, zero_division=0)
                 accuracy_meter.update(accuracy,
                                       batch_size,
                                       raw_scores=(label_hat == label_np))

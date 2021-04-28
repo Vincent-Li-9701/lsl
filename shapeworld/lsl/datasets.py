@@ -12,9 +12,10 @@ import torch.utils.data as data
 from torchvision import transforms
 
 from utils import next_random, OrderedCounter
-
+from transformers import LxmertTokenizerFast
+tokenizer = LxmertTokenizerFast.from_pretrained('unc-nlp/lxmert-base-uncased')
 # Set your data directory here!
-DATA_DIR = '/home/songlin/'
+DATA_DIR = '/data3/qinziyue/lsl/shapeworld/'
 SPLIT_OPTIONS = ['train', 'val', 'test', 'val_same', 'test_same']
 
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -252,7 +253,7 @@ class ShapeWorld(data.Dataset):
         self.in_features = in_features
         self.ex_features = ex_features
         self.hints = hints
-
+        hint_string = np.array(tokenizer(self.hints, padding=True)['input_ids']) 
         if self.vocab is None:
             self.create_vocab(hints, test_hints)
 
@@ -338,7 +339,7 @@ class ShapeWorld(data.Dataset):
                 th = hints[test_hint_i]
                 thl = hint_lengths[test_hint_i]
             data_i = (ex_features[i], in_features[i], labels[i], hints[hint_i],
-                      hint_lengths[hint_i], th, thl)
+                      hint_lengths[hint_i], hint_string[i], th, thl)
             data.append(data_i)
 
         self.data = data
@@ -385,13 +386,14 @@ class ShapeWorld(data.Dataset):
         batch_label = []
         batch_hint = []
         batch_hint_length = []
+        batch_hint_string = []
         if self.test_hints is not None:
             batch_test_hint = []
             batch_test_hint_length = []
 
         for _ in range(n_batch):
             index = random.randint(n_train)
-            examples, image, label, hint, hint_length, test_hint, test_hint_length = \
+            examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length = \
                 self.__getitem__(index)
 
             batch_examples.append(examples)
@@ -399,6 +401,7 @@ class ShapeWorld(data.Dataset):
             batch_label.append(label)
             batch_hint.append(hint)
             batch_hint_length.append(hint_length)
+            batch_hint_string.append(hint_string)
             if self.test_hints is not None:
                 batch_test_hint.append(test_hint)
                 batch_test_hint_length.append(test_hint_length)
@@ -409,6 +412,7 @@ class ShapeWorld(data.Dataset):
         batch_hint = torch.stack(batch_hint)
         batch_hint_length = torch.from_numpy(
             np.array(batch_hint_length)).long()
+        batch_hint_string = torch.stack(batch_hint_string)
         if self.test_hints is not None:
             batch_test_hint = torch.stack(batch_test_hint)
             batch_test_hint_length = torch.from_numpy(
@@ -419,7 +423,7 @@ class ShapeWorld(data.Dataset):
 
         return (
             batch_examples, batch_image, batch_label, batch_hint,
-            batch_hint_length, batch_test_hint, batch_test_hint_length
+            batch_hint_length, batch_hint_string, batch_test_hint, batch_test_hint_length
         )
 
     def add_fixed_noise_colors(self,
@@ -522,11 +526,12 @@ class ShapeWorld(data.Dataset):
 
     def __getitem__(self, index):
         if self.split == 'train' and self.augment:
-            examples, image, label, hint, hint_length, test_hint, test_hint_length = self.data[
+            examples, image, label, hint, hint_length, hint_string,  test_hint, test_hint_length = self.data[
                 index]
 
             # tie a language to a concept; convert to pytorch.
             hint = torch.from_numpy(hint).long()
+            hint_string = torch.from_numpy(hint_string).long()
             test_hint = torch.from_numpy(test_hint).long()
             examples = torch.clone(torch.from_numpy(examples)).float()
 
@@ -539,7 +544,7 @@ class ShapeWorld(data.Dataset):
                 # return a tuple (example_z, hint_z, 1) or...
                 # return a tuple (example_z, hint_other_z, 0).
                 # Sample a new test hint as well.
-                examples2, image2, _, support_hint2, support_hint_length2, query_hint2, query_hint_length2 = self.data[
+                examples2, image2, _, support_hint2, support_hint_length2, support_hint_string, query_hint2, query_hint_length2 = self.data[
                     random.randint(n_train)]
 
                 # pick either an example or an image as the query image for negative samples.
@@ -576,7 +581,7 @@ class ShapeWorld(data.Dataset):
                     feats = self.preprocess(feats)
                     examples = torch.stack(
                         [self.preprocess(e) for e in examples])
-                return examples, feats, 0, hint, hint_length, test_hint, test_hint_length
+                return examples, feats, 0, hint, hint_length, hint_string, test_hint, test_hint_length
             else:  # sample_label == 1
                 swap = random.randint((N_EX + 1 if label == 1 else N_EX))
                 # pick either an example or an image.
@@ -620,10 +625,10 @@ class ShapeWorld(data.Dataset):
                     feats = self.preprocess(feats)
                     examples = torch.stack(
                         [self.preprocess(e) for e in examples])
-                return examples, feats, 1, hint, hint_length, test_hint, test_hint_length
+                return examples, feats, 1, hint, hint_length, hint_string, test_hint, test_hint_length
 
         else:  # val, val_same, test, test_same
-            examples, image, label, hint, hint_length, test_hint, test_hint_length = self.data[
+            examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length = self.data[
                 index]
 
             # no fancy stuff. just return image.
@@ -650,7 +655,7 @@ class ShapeWorld(data.Dataset):
                 image = self.preprocess(image)
                 examples = torch.stack([self.preprocess(e) for e in examples])
 
-            return examples, image, label, hint, hint_length, test_hint, test_hint_length
+            return examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length
 
     def to_text(self, hints):
         texts = []
