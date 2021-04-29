@@ -36,7 +36,9 @@ class ExWrapper(nn.Module):
 
         if len(x.shape) == 5:
             x_enc = x_enc.view(batch_size, n_ex, -1)
-
+        
+        # during training normalize across four examples
+        # during testing instance normalize
         if self.retrieve_mode:
             return F.normalize(x_enc, dim=1)
         else:
@@ -80,11 +82,11 @@ class TextRep(nn.Module):
     Again, this uses 512 hidden dimensions.
     """
 
-    def __init__(self, embedding_module, hidden_size=512, retrieve_mode=False):
+    def __init__(self, embedding_module, hidden_size=512, num_layers=1, retrieve_mode=False):
         super(TextRep, self).__init__()
         self.embedding = embedding_module
         self.embedding_dim = embedding_module.embedding_dim
-        self.gru = nn.GRU(self.embedding_dim, hidden_size) # 512
+        self.gru = nn.GRU(self.embedding_dim, hidden_size, num_layers) # 512
         self.retrieve_mode = retrieve_mode
 
     def forward(self, seq, length):
@@ -112,9 +114,8 @@ class TextRep(nn.Module):
             _, reversed_idx = torch.sort(sorted_idx)
             hidden = hidden[reversed_idx]
 
-
         if self.retrieve_mode:
-            return F.normalize(hidden, dim=1)
+            return F.normalize(hidden, dim=-1)
         else:
             return hidden
 
@@ -196,13 +197,13 @@ class TextProposal(nn.Module):
     https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/model.py
     """
 
-    def __init__(self, embedding_module, hidden_size=512):
+    def __init__(self, embedding_module, hidden_size=512, num_layers=1):
         super(TextProposal, self).__init__()
         self.hidden_size = hidden_size
         self.embedding = embedding_module
         self.embedding_dim = embedding_module.embedding_dim
         self.vocab_size = embedding_module.num_embeddings
-        self.gru = nn.GRU(self.embedding_dim, hidden_size) # 512
+        self.gru = nn.GRU(self.embedding_dim, hidden_size, num_layers) # 512
         self.outputs2vocab = nn.Linear(hidden_size, self.vocab_size) # 512
 
     def forward(self, feats, seq, length):
@@ -215,7 +216,7 @@ class TextProposal(nn.Module):
             seq = seq[sorted_idx]
             feats = feats[sorted_idx]
 
-        feats = feats.unsqueeze(0)
+        feats = feats.repeat(self.gru.num_layers,1,1) #.unsqueeze(0)
         # reorder from (B,L,D) to (L,B,D)
         seq = seq.transpose(0, 1)
 
@@ -249,7 +250,7 @@ class TextProposal(nn.Module):
         batch_size = feats.size(0)
 
         # initialize hidden states using image features
-        states = feats.unsqueeze(0)
+        states = feats.repeat(self.gru.num_layers,1,1) #.unsqueeze(0)
 
         # first input is SOS token
         inputs = np.array([sos_index for _ in range(batch_size)])

@@ -6,8 +6,9 @@ import os
 import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, recall_score, precision_score
 from torchtext.data.metrics import bleu_score
+import wandb
 
 import torch
 import torch.nn as nn
@@ -19,14 +20,18 @@ from utils import (
     save_defaultdict_to_fs,
     idx2word,
 )
+
+from arguments import ArgumentParser
+from bertadam import BertAdam
 from datasets import ShapeWorld, extract_features
 from datasets import SOS_TOKEN, EOS_TOKEN, PAD_TOKEN
+from lxmert import Lxmert
 from models import ImageRep, TextRep, TextProposal, ExWrapper
 from models import MultimodalRep,MultimodalDeepRep
 from models import DotPScorer, BilinearScorer
 from vision import Conv4NP, ResNet18
 from tre import AddComp, MulComp, CosDist, L1Dist, L2Dist, tre
-from retrivers import construct_dict, dot_product, cos_similarity, l2_distance
+from retrievers import construct_dict, gen_retriever
 import matplotlib.pyplot as plt
 
 TRE_COMP_FNS = {
@@ -60,181 +65,7 @@ def combine_feats(all_feats):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('exp_dir', type=str, help='Output directory')
-    hyp_prediction = parser.add_mutually_exclusive_group()
-    hyp_prediction.add_argument(
-        '--predict_concept_hyp',
-        action='store_true',
-        help='Predict concept hypotheses during training')
-    hyp_prediction.add_argument(
-        '--predict_image_hyp',
-        action='store_true',
-        help='Predict image hypotheses during training')
-    hyp_prediction.add_argument('--infer_hyp',
-                                action='store_true',
-                                help='Use hypotheses for prediction')
-    parser.add_argument('--backbone',
-                        choices=['vgg16_fixed', 'conv4', 'resnet18'],
-                        default='vgg16_fixed',
-                        help='Image model')
-    parser.add_argument(
-        '--multimodal_concept',
-        action='store_true',
-        help='Concept is a combination of hypothesis + image rep')
-    parser.add_argument('--comparison',
-                        choices=['dotp', 'bilinear'],
-                        default='dotp',
-                        help='How to compare support to query reps')
-    parser.add_argument('--dropout',
-                        default=0.0,
-                        type=float,
-                        help='Apply dropout to comparison layer')
-    parser.add_argument('--debug_bilinear',
-                        action='store_true',
-                        help='If using bilinear term, use identity matrix')
-    parser.add_argument(
-        '--poe',
-        action='store_true',
-        help='Product of experts: support lang -> query img '
-             'x support img -> query img'
-    )
-    parser.add_argument('--predict_hyp_task',
-                        default='generate',
-                        choices=['generate', 'embed'],
-                        help='hyp prediction task')
-    parser.add_argument('--n_infer',
-                        type=int,
-                        default=10,
-                        help='Number of hypotheses to infer')
-    parser.add_argument(
-        '--oracle',
-        action='store_true',
-        help='Use oracle hypotheses for prediction (requires --infer_hyp)')
-    parser.add_argument(
-        '--retrive_hint',
-        action='store_true',
-        help='use the hint of tasks seen during training time (requires --infer_hyp)')
-    parser.add_argument('--max_train',
-                        type=int,
-                        default=None,
-                        help='Max number of training examples')
-    parser.add_argument('--noise',
-                        type=float,
-                        default=0.0,
-                        help='Amount of noise to add to each example')
-    parser.add_argument(
-        '--class_noise_weight',
-        type=float,
-        default=0.0,
-        help='How much of that noise should be class diagnostic?')
-    parser.add_argument('--noise_at_test',
-                        action='store_true',
-                        help='Add instance-level noise at test time')
-    parser.add_argument('--noise_type',
-                        default='gaussian',
-                        choices=['gaussian', 'uniform'],
-                        help='Type of noise')
-    parser.add_argument(
-        '--fixed_noise_colors',
-        default=None,
-        type=int,
-        help='Fix noise based on class, with a max of this many')
-    parser.add_argument(
-        '--fixed_noise_colors_max_rgb',
-        default=0.2,
-        type=float,
-        help='Maximum color value a single color channel '
-             'can have for noise background'
-    )
-    parser.add_argument('--batch_size',
-                        type=int,
-                        default=100,
-                        help='Train batch size')
-    parser.add_argument('--epochs', type=int, default=50, help='Train epochs')
-    parser.add_argument(
-        '--data_dir',
-        default=None,
-        help='Specify custom data directory (must have shapeworld folder)')
-    parser.add_argument('--lr',
-                        type=float,
-                        default=0.0001,
-                        help='Learning rate')
-    parser.add_argument('--tre_err',
-                        default='cos',
-                        choices=['cos', 'l1', 'l2'],
-                        help='TRE Error Metric')
-    parser.add_argument('--tre_comp',
-                        default='add',
-                        choices=['add', 'mul'],
-                        help='TRE Composition Function')
-    parser.add_argument('--optimizer',
-                        choices=['adam', 'rmsprop', 'sgd'],
-                        default='adam',
-                        help='Optimizer to use')
-    parser.add_argument('--seed', type=int, default=1, help='Random seed')
-    parser.add_argument('--language_filter',
-                        default=None,
-                        type=str,
-                        choices=['color', 'nocolor'],
-                        help='Filter language')
-    parser.add_argument('--shuffle_words',
-                        action='store_true',
-                        help='Shuffle words for each caption')
-    parser.add_argument('--shuffle_captions',
-                        action='store_true',
-                        help='Shuffle captions for each class')
-    parser.add_argument('--log_interval',
-                        type=int,
-                        default=10,
-                        help='How often to log loss')
-    parser.add_argument('--pred_lambda',
-                        type=float,
-                        default=1.0,
-                        help='Weight on prediction loss')
-    parser.add_argument('--hypo_lambda',
-                        type=float,
-                        default=10.0,
-                        help='Weight on hypothesis hypothesis')
-    parser.add_argument('--save_checkpoint',
-                        action='store_true',
-                        help='Save model')
-    parser.add_argument('--cuda',
-                        action='store_true',
-                        help='Enables CUDA training')
-    parser.add_argument(
-        '--scheduled_sampling',
-        action='store_true',
-        help='Use scheduled samping during training')
-    parser.add_argument(
-        '--plot_bleu_score',
-        action='store_true',
-        help='Use scheduled samping during training')
-    args = parser.parse_args()
-
-    if args.oracle and not args.infer_hyp:
-        parser.error("Must specify --infer_hyp to use --oracle")
-
-    if args.retrive_hint and not args.infer_hyp:
-        parser.error("Must specify --infer_hyp to use --retrive_hint")
-
-    if args.multimodal_concept and not args.infer_hyp:
-        parser.error("Must specify --infer_hyp to use --multimodal_concept")
-
-    if args.poe and not args.infer_hyp:
-        parser.error("Must specify --infer_hyp to use --poe")
-
-    if args.dropout > 0.0 and args.comparison == 'dotp':
-        raise NotImplementedError
-
-    args.predict_hyp = args.predict_concept_hyp or args.predict_image_hyp
-    args.use_hyp = args.predict_hyp or args.infer_hyp
-    args.encode_hyp = args.infer_hyp or (args.predict_hyp and args.predict_hyp_task == 'embed')
-    args.decode_hyp = args.infer_hyp or (args.predict_hyp and args.predict_hyp_task == 'generate')
-
-    if args.oracle or args.retrive_hint: 
-        args.n_infer = 1  # No need to repeatedly infer, hint is given
+    args = ArgumentParser().parse_args()
 
     if not os.path.isdir(args.exp_dir):
         os.makedirs(args.exp_dir)
@@ -247,7 +78,7 @@ if __name__ == "__main__":
 
     # train dataset will return (image, label, hint_input, hint_target, hint_length)
     precomputed_features = args.backbone == 'vgg16_fixed'
-    preprocess = args.backbone == 'resnet18'
+    preprocess = args.backbone == 'resnet18' or args.backbone == 'lxmert'
     train_dataset = ShapeWorld(
         split='train',
         vocab=None,
@@ -343,11 +174,15 @@ if __name__ == "__main__":
         backbone_model = Conv4NP()
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
+    elif args.backbone == 'lxmert':
+        backbone_model = Lxmert(train_vocab_size, 768, 9408, 4, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
-    if args.retrive_hint:
+    if args.hint_retriever:
         image_model = ExWrapper(ImageRep(backbone_model, hidden_size=512), retrieve_mode=True)
+    elif args.backbone == 'lxmert':
+        image_model = backbone_model
     else:
         image_model = ExWrapper(ImageRep(backbone_model, hidden_size=512))
     image_model = image_model.to(device)
@@ -374,7 +209,7 @@ if __name__ == "__main__":
         params_to_optimize.extend(proposal_model.parameters())
 
     if args.encode_hyp:
-        if args.retrive_hint:
+        if args.hint_retriever:
             hint_model = TextRep(embedding_model, hidden_size=512, retrieve_mode=True)
         else:
             hint_model = TextRep(embedding_model, hidden_size=512)
@@ -389,9 +224,19 @@ if __name__ == "__main__":
     optfunc = {
         'adam': optim.Adam,
         'rmsprop': optim.RMSprop,
-        'sgd': optim.SGD
+        'sgd': optim.SGD,
+        'bertadam': BertAdam
     }[args.optimizer]
-    optimizer = optfunc(params_to_optimize, lr=args.lr)
+
+    t_total = int(100 * args.epochs)
+    optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
+
+    # initialize weight and bias
+    wandb.init(project='v_dev', entity='lsl')
+    config = wandb.config
+    config.learning_rate = args.lr
+
+    wandb.watch(image_model)
 
     def train(epoch, n_steps=100):
         image_model.train()
@@ -428,7 +273,7 @@ if __name__ == "__main__":
             image_rep = image_model(image)
             examples_rep = image_model(examples)
             examples_rep_mean = torch.mean(examples_rep, dim=1)
-
+            
             # Prediction loss
             if args.infer_hyp:
                 # Use hypothesis to compute prediction loss
@@ -541,6 +386,8 @@ if __name__ == "__main__":
                 multimodal_model.eval()
 
         accuracy_meter = AverageMeter(raw=True)
+        precision_meter = AverageMeter(raw=True)
+        recall_meter = AverageMeter(raw=True)
         retrival_acc_meter = AverageMeter(raw=True)
         bleu_meter_n1 = AverageMeter(raw=True)
         bleu_meter_n2 = AverageMeter(raw=True)
@@ -549,7 +396,12 @@ if __name__ == "__main__":
         data_loader = data_loader_dict[split]
 
         with torch.no_grad():
+            idx = 0
             for examples, image, label, hint_seq, hint_length, *rest in data_loader:
+                if idx > len(data_loader) // 2:
+                    break
+                idx += 1
+                
                 examples = examples.to(device)
                 image = image.to(device)
                 label = label.to(device)
@@ -563,11 +415,9 @@ if __name__ == "__main__":
                     examples_rep = image_model(examples)
                     examples_rep_mean = torch.mean(examples_rep, dim=1)
 
-                if args.retrive_hint:
-                    # retrive the hint representation of the closest concept
-                    # closest_neighbor_idx = cos_similarity(examples_rep_mean, hint_rep_dict[0])
-                    closest_neighbor_idx = l2_distance(examples_rep_mean, hint_rep_dict[0]) 
-                    # closest_neighbor_idx = dot_product(examples_rep_mean, hint_rep_dict[0])
+                if args.hint_retriever:
+                    # retrieve the hint representation of the closest concept
+                    closest_neighbor_idx = gen_retriever(args.hint_retriever)(examples_rep_mean, hint_rep_dict[0]) 
 
                     # calculating retrival accuracy
                     raw_scores = torch.prod(torch.eq(hint_rep_dict[1][closest_neighbor_idx], hint_seq.cuda()).float(), dim=1)
@@ -591,11 +441,11 @@ if __name__ == "__main__":
                     for j in range(args.n_infer):
                         # Decode greedily for first hyp; otherwise sample
                         # If --oracle, hint_seq/hint_length is given
-                        if args.retrive_hint:
+                        if args.hint_retriever:
                             hint_seq = hint_rep_dict[1][closest_neighbor_idx]
                             hint_length = hint_rep_dict[2][closest_neighbor_idx]
                         elif not args.oracle:
-                            hint_seq, hint_length = proposal_model.test_sample(
+                            hint_seq, hint_length = proposal_model.sample(
                                 examples_rep_mean,
                                 sos_index,
                                 eos_index,
@@ -630,7 +480,7 @@ if __name__ == "__main__":
                         label_hat = label_hat.cpu().numpy()
 
                         # Update scores and predictions for best running hints
-                        if not args.oracle and not args.retrive_hint:
+                        if not args.oracle and not args.hint_retriever:
                             updates = hint_scores > best_hint_scores
                             best_hint_scores = np.where(
                                 updates, hint_scores, best_hint_scores)
@@ -649,6 +499,8 @@ if __name__ == "__main__":
                     bleu_n1 = bleu_score(hint_seq, support_hint, max_n=1, weights=[1.0])
                     bleu_meter_n1.update(bleu_n1, batch_size, raw_scores=[bleu_n1])
                     accuracy = accuracy_score(label_np, best_predictions)
+                    precision = precision_score(label_np, best_predictions)
+                    recall = recall_score(label_np, best_predictions)
                 else:
                     # Compare image directly to example rep
                     score = scorer_model.score(examples_rep_mean, image_rep)
@@ -657,13 +509,25 @@ if __name__ == "__main__":
                     label_hat = label_hat.cpu().numpy()
 
                     accuracy = accuracy_score(label_np, label_hat)
+                    precision = precision_score(label_np, label_hat)
+                    recall = recall_score(label_np, label_hat)
+
                 accuracy_meter.update(accuracy,
                                       batch_size,
                                       raw_scores=(label_hat == label_np))
+                precision_meter.update(precision,
+                                      batch_size,
+                                      raw_scores=[precision])
+                recall_meter.update(recall,
+                                      batch_size,
+                                      raw_scores=[recall])
 
-        print('====> {:>12}\tEpoch: {:>3}\tAccuracy: {:.4f}\tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\tRetrieval Accuracy: {:.4f}'.format(
-            '({})'.format(split), epoch, accuracy_meter.avg, bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, retrival_acc_meter.avg))
-        return accuracy_meter.avg, accuracy_meter.raw_scores, bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg
+        print('====> {:>12}\tEpoch: {:>3}\tAccuracy: {:.4f}\tPrecision: {:.4f}\tRecall: {:.4f}\
+            \tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\tRetrieval Accuracy: {:.4f}'.format(
+            '({})'.format(split), epoch, accuracy_meter.avg, precision_meter.avg, recall_meter.avg, \
+                bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, retrival_acc_meter.avg))
+        return accuracy_meter.avg, accuracy_meter.raw_scores, precision_meter.avg, recall_meter.avg, \
+            bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg
 
     tre_comp_fn = TRE_COMP_FNS[args.tre_comp]()
     tre_err_fn = TRE_ERR_FNS[args.tre_err]()
@@ -745,40 +609,47 @@ if __name__ == "__main__":
     hint_rep_dict = None
     for epoch in range(1, args.epochs + 1):
         train_loss = train(epoch)
-
-        if epoch <= 40 or  epoch % 4 != 0:
+        if epoch % 10 != 1:
             continue
         # storing seen concepts' hint representations
-        if args.retrive_hint:
+        if args.hint_retriever:
             train_dataset.augment = False # this is not gonna work if there are multiple workers
             hint_rep_dict = construct_dict(train_loader, image_model, hint_model)
             train_dataset.augment = True
-        train_acc, _ , _, _ , _, _= test(epoch, 'train', hint_rep_dict)
-        val_acc, _, val_bleu_n1, val_bleu_n2, val_bleu_n3, val_bleu_n4 = test(epoch, 'val', hint_rep_dict)
+        train_acc, _, train_prec, train_reca, *_ = test(epoch, 'train', hint_rep_dict)
+        val_acc, _, val_prec, val_reca, *_ = test(epoch, 'val', hint_rep_dict)
         # Evaluate tre on validation set
         #  val_tre, val_tre_std = eval_tre(epoch, 'val')
         val_tre, val_tre_std = 0.0, 0.0
 
-        test_acc, test_raw_scores, _, _, _, _ = test(epoch, 'test', hint_rep_dict)
+        test_acc, test_raw_scores, test_prec, test_reca, \
+            test_bleu_n1, test_bleu_n2, test_bleu_n3, test_bleu_n4 = test(epoch, 'test', hint_rep_dict)
         if has_same:
-            val_same_acc, _, val_same_bleu_n1, val_same_bleu_n2, val_same_bleu_n3, val_same_bleu_n4 = test(epoch, 'val_same', hint_rep_dict)
-            test_same_acc, test_same_raw_scores, _, _, _, _ = test(epoch, 'test_same', hint_rep_dict)
+            val_same_acc, _, val_same_prec, val_same_reca, *_ = test(epoch, 'val_same', hint_rep_dict)
+            test_same_acc, test_same_raw_scores, test_same_prec, test_same_reca,\
+                test_same_bleu_n1, test_same_bleu_n2, test_same_bleu_n3, test_same_bleu_n4 = test(epoch, 'test_same', hint_rep_dict)    
             all_test_raw_scores = test_raw_scores + test_same_raw_scores
         else:
             val_same_acc = val_acc
             test_same_acc = test_acc
             all_test_raw_scores = test_raw_scores
 
+        wandb.log({"loss": train_loss, 'train_acc': train_acc, 'train_prec': train_prec, 'train_reca': train_reca,\
+            'val_same_acc': val_same_acc, 'val_same_prec': val_same_prec, 'val_same_reca': val_same_reca,\
+            'val_acc': val_acc,'val_prec': val_prec, 'val_reca': val_reca,\
+            'test_same_acc': test_same_acc, 'test_same_prec': test_same_prec, 'test_same_reca': test_same_reca,\
+            'test_acc': test_acc, 'test_prec': test_prec, 'test_reca': test_reca})
+        
         # Compute confidence intervals
         n_test = len(all_test_raw_scores)
         test_acc_ci = 1.96 * np.std(all_test_raw_scores) / np.sqrt(n_test)
 
         epoch_acc = (val_acc + val_same_acc) / 2
         is_best_epoch = epoch_acc > (best_val_acc + best_val_same_acc) / 2
-        average_bleu_n1 = (val_same_bleu_n1 + val_bleu_n1) / 2
-        average_bleu_n2 = (val_same_bleu_n2 + val_bleu_n2) / 2
-        average_bleu_n3 = (val_same_bleu_n3 + val_bleu_n3) / 2
-        average_bleu_n4 = (val_same_bleu_n4 + val_bleu_n4) / 2
+        average_bleu_n1 = (test_same_bleu_n1 + test_bleu_n1) / 2
+        average_bleu_n2 = (test_same_bleu_n2 + test_bleu_n2) / 2
+        average_bleu_n3 = (test_same_bleu_n3 + test_bleu_n3) / 2
+        average_bleu_n4 = (test_same_bleu_n4 + test_bleu_n4) / 2
         val_acc_collection.append(epoch_acc)
         bleu_n1_collection.append(average_bleu_n1)
         bleu_n4_collection.append(average_bleu_n4)
@@ -863,7 +734,7 @@ if __name__ == "__main__":
         '(best_test_bleu_n4)', best_epoch,
         best_test_bleu_n4))
     if args.plot_bleu_score:
-        x = (np.array(range(len(val_acc_collection))) + 1) * 4
+        x = (np.array(range(len(val_acc_collection))) + 1)
         plt.plot(x, val_acc_collection, label = "validation accuracy")
         plt.plot(x, bleu_n1_collection, label = "bleu n=1")
         plt.plot(x, bleu_n2_collection, label = "bleu n=2")

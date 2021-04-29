@@ -1,5 +1,16 @@
 import torch
 
+def gen_retriever(retriver):
+    if retriver == "dotp":
+        return dot_product
+    elif retriver == "l2":
+        return l2_distance
+    elif retriver == "cos":
+        return cos_similarity
+    else:
+        raise RuntimeError("No Retriever Selected")
+
+
 def construct_dict(dataloader, image_model=None, hint_model=None, multimodal_model=None):
     hint_rep_dict = []
     image_model.eval()
@@ -9,7 +20,7 @@ def construct_dict(dataloader, image_model=None, hint_model=None, multimodal_mod
         for examples, image, label, hint, hint_length, *rest in dataloader:
             hint = hint.cuda()
             examples_rep_mean = torch.mean(image_model(examples.cuda()), dim=1)
-
+            
             if len(hint_rep_dict) == 0:
                 hint_rep_dict.extend([examples_rep_mean, hint, hint_length])
             else:
