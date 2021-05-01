@@ -253,7 +253,9 @@ class ShapeWorld(data.Dataset):
         self.in_features = in_features
         self.ex_features = ex_features
         self.hints = hints
-        hint_string = np.array(tokenizer(self.hints, padding=True)['input_ids']) 
+        hint_token_results = tokenizer(self.hints, padding=True) 
+        hint_tokens = np.array(hint_token_results['input_ids'])
+        attention_masks = np.array(hint_token_results['attention_mask'])
         if self.vocab is None:
             self.create_vocab(hints, test_hints)
 
@@ -270,76 +272,10 @@ class ShapeWorld(data.Dataset):
         # this is the maximum number of tokens in a sentence
         max_length = get_max_hint_length(data_dir)
 
-        hints, hint_lengths = [], []
-        for hint in self.hints:
-            hint_tokens = hint.split()
-            # Hint processing
-            if self.language_filter == 'color':
-                hint_tokens = [t for t in hint_tokens if t in COLORS]
-            elif self.language_filter == 'nocolor':
-                hint_tokens = [t for t in hint_tokens if t not in COLORS]
-            if self.shuffle_words:
-                random.shuffle(hint_tokens)
-
-            hint = [SOS_TOKEN, *hint_tokens, EOS_TOKEN]
-            hint_length = len(hint)
-
-            hint.extend([PAD_TOKEN] * (max_length + 2 - hint_length))
-            hint = [self.w2i.get(w, self.w2i[UNK_TOKEN]) for w in hint]
-
-            hints.append(hint)
-            hint_lengths.append(hint_length)
-
-        hints = np.array(hints)
-        hint_lengths = np.array(hint_lengths)
-
-        if self.test_hints is not None:
-            test_hints, test_hint_lengths = [], []
-            for test_hint in self.test_hints:
-                test_hint_tokens = test_hint.split()
-
-                if self.language_filter == 'color':
-                    test_hint_tokens = [
-                        t for t in test_hint_tokens if t in COLORS
-                    ]
-                elif self.language_filter == 'nocolor':
-                    test_hint_tokens = [
-                        t for t in test_hint_tokens if t not in COLORS
-                    ]
-                if self.shuffle_words:
-                    random.shuffle(test_hint_tokens)
-
-                test_hint = [SOS_TOKEN, *test_hint_tokens, EOS_TOKEN]
-                test_hint_length = len(test_hint)
-
-                test_hint.extend([PAD_TOKEN] * (max_length + 2 - test_hint_length))
-
-                test_hint = [
-                    self.w2i.get(w, self.w2i[UNK_TOKEN]) for w in test_hint
-                ]
-
-                test_hints.append(test_hint)
-                test_hint_lengths.append(test_hint_length)
-
-            test_hints = np.array(test_hints)
-            test_hint_lengths = np.array(test_hint_lengths)
 
         data = []
         for i in range(n_data):
-            if self.shuffle_captions:
-                hint_i = random.randint(len(hints))
-                test_hint_i = random.randint(len(test_hints))
-            else:
-                hint_i = i
-                test_hint_i = i
-            if self.test_hints is not None:
-                th = test_hints[test_hint_i]
-                thl = test_hint_lengths[test_hint_i]
-            else:
-                th = hints[test_hint_i]
-                thl = hint_lengths[test_hint_i]
-            data_i = (ex_features[i], in_features[i], labels[i], hints[hint_i],
-                      hint_lengths[hint_i], hint_string[i], th, thl)
+            data_i = (ex_features[i], in_features[i], labels[i], hint_tokens[i], attention_masks[i])
             data.append(data_i)
 
         self.data = data
@@ -384,47 +320,30 @@ class ShapeWorld(data.Dataset):
         batch_examples = []
         batch_image = []
         batch_label = []
-        batch_hint = []
-        batch_hint_length = []
-        batch_hint_string = []
+        batch_hint_tokens = []
+        batch_attention_masks = []
         if self.test_hints is not None:
             batch_test_hint = []
             batch_test_hint_length = []
 
         for _ in range(n_batch):
             index = random.randint(n_train)
-            examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length = \
+            examples, image, label, hint_token, attention_mask = \
                 self.__getitem__(index)
 
             batch_examples.append(examples)
             batch_image.append(image)
             batch_label.append(label)
-            batch_hint.append(hint)
-            batch_hint_length.append(hint_length)
-            batch_hint_string.append(hint_string)
-            if self.test_hints is not None:
-                batch_test_hint.append(test_hint)
-                batch_test_hint_length.append(test_hint_length)
+            batch_hint_tokens.append(hint_token)
+            batch_attention_masks.append(attention_mask)
 
         batch_examples = torch.stack(batch_examples)
         batch_image = torch.stack(batch_image)
         batch_label = torch.from_numpy(np.array(batch_label)).long()
-        batch_hint = torch.stack(batch_hint)
-        batch_hint_length = torch.from_numpy(
-            np.array(batch_hint_length)).long()
-        batch_hint_string = torch.stack(batch_hint_string)
-        if self.test_hints is not None:
-            batch_test_hint = torch.stack(batch_test_hint)
-            batch_test_hint_length = torch.from_numpy(
-                np.array(batch_test_hint_length)).long()
-        else:
-            batch_test_hint = None
-            batch_test_hint_length = None
+        batch_hint_tokens = torch.stack(batch_hint_tokens)
+        batch_attention_masks = torch.stack(batch_attention_masks)
 
-        return (
-            batch_examples, batch_image, batch_label, batch_hint,
-            batch_hint_length, batch_hint_string, batch_test_hint, batch_test_hint_length
-        )
+        return (batch_examples, batch_image, batch_label,  batch_hint_tokens, batch_attention_masks)
 
     def add_fixed_noise_colors(self,
                                support,
@@ -526,13 +445,12 @@ class ShapeWorld(data.Dataset):
 
     def __getitem__(self, index):
         if self.split == 'train' and self.augment:
-            examples, image, label, hint, hint_length, hint_string,  test_hint, test_hint_length = self.data[
+            examples, image, label, hint_token, attention_mask = self.data[
                 index]
 
             # tie a language to a concept; convert to pytorch.
-            hint = torch.from_numpy(hint).long()
-            hint_string = torch.from_numpy(hint_string).long()
-            test_hint = torch.from_numpy(test_hint).long()
+            hint_token = torch.from_numpy(hint_token)
+            attention_mask = torch.from_numpy(attention_mask)
             examples = torch.clone(torch.from_numpy(examples)).float()
 
             # in training, pick whether to show positive or negative example.
@@ -544,44 +462,22 @@ class ShapeWorld(data.Dataset):
                 # return a tuple (example_z, hint_z, 1) or...
                 # return a tuple (example_z, hint_other_z, 0).
                 # Sample a new test hint as well.
-                examples2, image2, _, support_hint2, support_hint_length2, support_hint_string, query_hint2, query_hint_length2 = self.data[
+                examples2, image2, _, support_hint_token, support_attention_mask = self.data[
                     random.randint(n_train)]
 
                 # pick either an example or an image as the query image for negative samples.
                 swap = random.randint(N_EX + 1)
                 if swap == N_EX:
                     feats = image2
-                    # Use the QUERY hint of the new example
-                    test_hint = query_hint2
-                    test_hint_length = query_hint_length2
                 else:
                     feats = examples2[swap, ...]
-                    # Use the SUPPORT hint of the new example
-                    test_hint = support_hint2
-                    test_hint_length = support_hint_length2
-
-                test_hint = torch.from_numpy(test_hint).long()
 
                 feats = torch.from_numpy(feats).float()
-                # this is a 0 since feats does not match this hint.
-                if self.fixed_noise_colors is not None:
-                    examples, feats = self.add_fixed_noise_colors(
-                        examples,
-                        feats,
-                        hint,
-                        test_hint,
-                        clamp=not self.precomputed_features)
-                else:
-                    examples, feats = self.add_noise(
-                        examples,
-                        feats,
-                        0,
-                        clamp=not self.precomputed_features)
                 if self.preprocess is not None:
                     feats = self.preprocess(feats)
                     examples = torch.stack(
                         [self.preprocess(e) for e in examples])
-                return examples, feats, 0, hint, hint_length, hint_string, test_hint, test_hint_length
+                return examples, feats, 0, hint_token, attention_mask
             else:  # sample_label == 1
                 swap = random.randint((N_EX + 1 if label == 1 else N_EX))
                 # pick either an example or an image.
@@ -602,60 +498,31 @@ class ShapeWorld(data.Dataset):
 
                 # This is a positive example, so whatever example we've chosen,
                 # assume the query hint matches the support hint.
-                test_hint = hint
-                test_hint_length = hint_length
-
                 feats = feats.float()
-
-                if self.fixed_noise_colors is not None:
-                    examples, feats = self.add_fixed_noise_colors(
-                        examples,
-                        feats,
-                        hint,
-                        test_hint,
-                        clamp=not self.precomputed_features)
-                else:
-                    examples, feats = self.add_noise(
-                        examples,
-                        feats,
-                        1,
-                        clamp=not self.precomputed_features)
 
                 if self.preprocess is not None:
                     feats = self.preprocess(feats)
                     examples = torch.stack(
                         [self.preprocess(e) for e in examples])
-                return examples, feats, 1, hint, hint_length, hint_string, test_hint, test_hint_length
+                return examples, feats, 1, hint_token, attention_mask
 
         else:  # val, val_same, test, test_same
-            examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length = self.data[
+            examples, image, label, hint_token, attention_mask = self.data[
                 index]
 
             # no fancy stuff. just return image.
             image = torch.from_numpy(image).float()
 
             # NOTE: we provide the oracle text.
-            hint = torch.from_numpy(hint).long()
-            test_hint = torch.from_numpy(test_hint).long()
             examples = torch.from_numpy(examples).float()
-
-            # this is a 0 since feats does not match this hint.
-            if self.fixed_noise_colors is not None:
-                examples, image = self.add_fixed_noise_colors(
-                    examples,
-                    image,
-                    hint,
-                    test_hint,
-                    clamp=not self.precomputed_features)
-            else:
-                examples, image = self.add_noise(
-                    examples, image, 0, clamp=not self.precomputed_features)
+            hint_token = torch.from_numpy(hint_token)
+            attention_mask = torch.from_numpy(attention_mask)
 
             if self.preprocess is not None:
                 image = self.preprocess(image)
                 examples = torch.stack([self.preprocess(e) for e in examples])
 
-            return examples, image, label, hint, hint_length, hint_string, test_hint, test_hint_length
+            return examples, image, label, hint_token, attention_mask
 
     def to_text(self, hints):
         texts = []

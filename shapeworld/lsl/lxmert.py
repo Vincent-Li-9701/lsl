@@ -14,7 +14,7 @@ class Lxmert(nn.Module):
             self.lxmert = LxmertModel.from_pretrained('unc-nlp/lxmert-base-uncased')
         else:
             config = LxmertConfig(vocab_size=vocab_size, hidden_size=hidden_size, \
-               visual_feat_dim=visual_feat_dim, visual_pos_dim=visual_pos_dim, initializer_range=initializer_range)
+               visual_feat_dim=visual_feat_dim, visual_pos_dim=visual_pos_dim, initializer_range=initializer_range, r_layers=3, l_layers=6, x_layers=3)
             
             self.lxmert = LxmertModel(config)
          
@@ -24,7 +24,7 @@ class Lxmert(nn.Module):
         visual_pos = [[[i/grid, j/grid, 1/grid, 1/grid] for i in range(grid) for j in range(grid)] for _ in range(batch_size)]
         return torch.tensor(visual_pos).to(self.lxmert.device)
 
-    def forward(self, visual_feats, visual_pos=None, input_ids=None):
+    def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None):
         original_shape = None
         
         if len(visual_feats.shape) > 4:
@@ -35,16 +35,16 @@ class Lxmert(nn.Module):
         if input_ids != None:
             if len(visual_feats.shape) > 4:
                 input_ids = torch.repeat_interleave(input_ids, original_shape[1], dim=0)
-
+                attention_mask = torch.repeat_interleave(attention_mask, original_shape[1], dim=0)
         else:
-            input_ids = torch.tensor([[1, 0, 2] for _ in range(visual_patches.shape[0])]).reshape((visual_patches.shape[0], -1)).cuda()
+            input_ids = torch.tensor([[101, 102] for _ in range(visual_patches.shape[0])]).reshape((visual_patches.shape[0], -1)).cuda()
       
         if visual_pos is None:
             visual_pos = self.gen_visual_pos(visual_patches.shape[0], visual_patches.shape[1])
         if self.pretrained:
-            out = self.lxmert(input_ids, self.visual_proj(visual_patches), visual_pos).pooled_output
+            out = self.lxmert(input_ids, self.visual_proj(visual_patches), visual_pos, attention_mask=attention_mask).pooled_output
         else:
-            out = self.lxmert(input_ids, visual_patches, visual_pos).pooled_output
+            out = self.lxmert(input_ids, visual_patches, visual_pos, attention_mask=attention_mask).pooled_output
 
         out = nn.functional.normalize(out, dim=-1)
         if original_shape:

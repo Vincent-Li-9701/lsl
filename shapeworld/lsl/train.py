@@ -251,7 +251,7 @@ if __name__ == "__main__":
         loss_total = 0
         pbar = tqdm(total=n_steps)
         for batch_idx in range(n_steps):
-            examples, image, label, hint_seq, hint_length, hint_string, *rest = \
+            examples, image, label, hint_tokens, attention_masks = \
                 train_dataset.sample_train(args.batch_size)
 
             examples = examples.to(device)
@@ -259,20 +259,12 @@ if __name__ == "__main__":
             label = label.to(device)
             batch_size = len(image)
             n_ex = examples.shape[1]
-            hint_seq = hint_seq.to(device)
-            #if args.use_hyp:
-            #    # Load hint
-            #    hint_seq = hint_seq.to(device)
-            #    hint_length = hint_length.to(device)
-            #    max_hint_length = hint_length.max().item()
-            #    # Cap max length if it doesn't fill out the tensor
-            #    if max_hint_length != hint_seq.shape[1]:
-            #        hint_seq = hint_seq[:, :max_hint_length]
 
             # Learn representations of images and examples
-            hint_string = hint_string.to(device)
+            hint_tokens = hint_tokens.to(device)
+            attention_masks = attention_masks.to(device)
             image_rep = image_model(image)
-            examples_rep = image_model(examples, input_ids=hint_string)
+            examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
             examples_rep_mean = torch.mean(examples_rep, dim=1)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
@@ -321,7 +313,7 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             idx = 0
-            for examples, image, label, hint_seq, hint_length, hint_string,  *rest in data_loader:
+            for examples, image, label, hint_tokens, attention_masks  in data_loader:
                 if idx > len(data_loader) // 2:
                     break
                 idx += 1
@@ -333,25 +325,14 @@ if __name__ == "__main__":
 
                 image_rep = image_model(image)
 
-                hint_seq = hint_seq.to(device)
-                hint_string = hint_string.to(device)
-                examples_rep = image_model(examples, input_ids=hint_string)
+                hint_tokens = hint_tokens.to(device)
+                attention_masks = attention_masks.to(device)
+                examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
                 examples_rep_mean = torch.mean(examples_rep, dim=1) 
                 # Compare image directly to example rep
                 score = scorer_model.score(examples_rep_mean, image_rep)
                 label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
-                support_hint = hint_seq
-                hint_seq = idx2word(hint_seq, data_loader.dataset.i2w, remove_pad=True)
-                support_hint = idx2word(support_hint, data_loader.dataset.i2w, remove_pad=True, target=True)
-                bleu_n4 = bleu_score(hint_seq, support_hint, max_n=4, weights=[0.0, 0.0, 0.0, 1.0])
-                bleu_meter_n4.update(bleu_n4, batch_size, raw_scores=[bleu_n4])
-                bleu_n3 = bleu_score(hint_seq, support_hint,  max_n=3, weights=[0.0, 0.0, 1.0])
-                bleu_meter_n3.update(bleu_n3, batch_size, raw_scores=[bleu_n3])
-                bleu_n2 = bleu_score(hint_seq, support_hint, max_n=2, weights=[0, 1.0])
-                bleu_meter_n2.update(bleu_n2, batch_size, raw_scores=[bleu_n2])
-                bleu_n1 = bleu_score(hint_seq, support_hint, max_n=1, weights=[1.0])
-                bleu_meter_n1.update(bleu_n1, batch_size, raw_scores=[bleu_n1])
                 accuracy = accuracy_score(label_np, label_hat)
                 precision = precision_score(label_np, label_hat, zero_division=0)
                 recall = recall_score(label_np, label_hat, zero_division=0)
@@ -452,7 +433,7 @@ if __name__ == "__main__":
     hint_rep_dict = None
     for epoch in range(1, args.epochs + 1):
         train_loss = train(epoch)
-        if epoch % 10 != 1:
+        if epoch % 10 != 1 :
             continue
         # storing seen concepts' hint representations
         if args.hint_retriever:
