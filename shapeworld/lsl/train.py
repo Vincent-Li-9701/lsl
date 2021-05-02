@@ -229,7 +229,7 @@ if __name__ == "__main__":
 
     t_total = int(100 * args.epochs)
     optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
-
+    
     # initialize weight and bias
     #wandb.init(project='lsl', entity='bhy070418s')
     wandb.init(project='easton_dev', entity='lsl')
@@ -319,8 +319,8 @@ if __name__ == "__main__":
                 idx += 1
                 examples = examples.to(device)
                 image = image.to(device)
-                label = label.to(device)
-                label_np = label.cpu().numpy().astype(np.uint8)
+                label = label.numpy()
+                label_np = label.astype(np.uint8)
                 batch_size = len(image)
 
                 image_rep = image_model(image)
@@ -481,6 +481,11 @@ if __name__ == "__main__":
         bleu_n3_collection.append(average_bleu_n3)
 
         if is_best_epoch:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': image_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }, "./best_model.pt")
             best_epoch = epoch
             best_epoch_acc = epoch_acc
             best_val_acc = val_acc
@@ -525,7 +530,12 @@ if __name__ == "__main__":
         metrics['has_same'] = has_same
         save_defaultdict_to_fs(metrics,
                                os.path.join(args.exp_dir, 'metrics.json'))
-
+    
+    torch.save({
+            'epoch': epoch,
+            'model_state_dict': image_model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            }, "./last_epoch.pt")
     print('====> DONE')
     print('====> BEST EPOCH: {}'.format(best_epoch))
     print('====> {:>17}\tEpoch: {}\tAccuracy: {:.4f}'.format(
