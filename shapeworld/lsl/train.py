@@ -530,7 +530,6 @@ if __name__ == "__main__":
         metrics['has_same'] = has_same
         save_defaultdict_to_fs(metrics,
                                os.path.join(args.exp_dir, 'metrics.json'))
-    
     torch.save({
             'epoch': epoch,
             'model_state_dict': image_model.state_dict(),
