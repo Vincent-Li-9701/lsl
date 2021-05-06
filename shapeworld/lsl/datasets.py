@@ -15,7 +15,7 @@ from utils import next_random, OrderedCounter
 from transformers import LxmertTokenizerFast
 tokenizer = LxmertTokenizerFast.from_pretrained('unc-nlp/lxmert-base-uncased')
 # Set your data directory here!
-DATA_DIR = '/data3/qinziyue/lsl/shapeworld/'
+DATA_DIR = '/home/songlin/'
 SPLIT_OPTIONS = ['train', 'val', 'test', 'val_same', 'test_same']
 
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -322,9 +322,6 @@ class ShapeWorld(data.Dataset):
         batch_label = []
         batch_hint_tokens = []
         batch_attention_masks = []
-        if self.test_hints is not None:
-            batch_test_hint = []
-            batch_test_hint_length = []
 
         for _ in range(n_batch):
             index = random.randint(n_train)

@@ -17,7 +17,9 @@ class Lxmert(nn.Module):
                visual_feat_dim=visual_feat_dim, visual_pos_dim=visual_pos_dim, initializer_range=initializer_range)
             
             self.lxmert = LxmertModel(config)
-         
+
+        # classification head for matching task
+        self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
     def gen_visual_pos(self, batch_size, num_visual_features):
         grid = int(num_visual_features ** (1/2))
@@ -38,20 +40,23 @@ class Lxmert(nn.Module):
                 attention_mask = torch.repeat_interleave(attention_mask, original_shape[1], dim=0)
         else:
             input_ids = torch.tensor([[101, 102] for _ in range(visual_patches.shape[0])]).reshape((visual_patches.shape[0], -1)).cuda()
+            attention_mask = torch.tensor([[0, 0] for _ in range(visual_patches.shape[0])]).reshape((visual_patches.shape[0], -1)).cuda()
       
         if visual_pos is None:
             visual_pos = self.gen_visual_pos(visual_patches.shape[0], visual_patches.shape[1])
-        if self.pretrained:
-            out = self.lxmert(input_ids, self.visual_proj(visual_patches), visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
-        else:
-            out = self.lxmert(input_ids, visual_patches, visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
-        out = torch.mean(out, dim=1)
         
-        out = nn.functional.normalize(out, dim=-1)
-        if original_shape:
-            return out.reshape(*original_shape[:2], -1)
+        if self.pretrained:
+            out = self.lxmert(input_ids, self.visual_proj(visual_patches), visual_pos, attention_mask=attention_mask).pooled_output#.vision_output
         else:
-            return out
+            out = self.lxmert(input_ids, visual_patches, visual_pos, attention_mask=attention_mask).pooled_output#.vision_output
+        
+        return self.seq_relationship(out)
+        # out = torch.mean(out, dim=1) # use when using vision_output
+        # out = nn.functional.normalize(out, dim=-1)
+        # if original_shape:
+        #     return out.reshape(*original_shape[:2], -1)
+        # else:
+        #     return out
     
 
 def init_lxmert(vocab_size, hidden_size, visual_feat_dim, visual_pos_dim):
