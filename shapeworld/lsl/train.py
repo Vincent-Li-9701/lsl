@@ -76,8 +76,8 @@ if __name__ == "__main__":
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     # train dataset will return (image, label, hint_input, hint_target, hint_length)
-    precomputed_features = args.backbone == 'vgg16_fixed'
-    preprocess = args.backbone == 'resnet18' or args.backbone == 'lxmert'
+    precomputed_features = True # args.backbone == 'vgg16_fixed' TODO
+    preprocess = False # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
     train_dataset = ShapeWorld(
         split='train',
         vocab=None,
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 9408, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -227,12 +227,6 @@ if __name__ == "__main__":
         'bertadam': BertAdam
     }[args.optimizer]
 
-    # checkpoint = torch.load("./last_epoch.pt", map_location=torch.device('cpu'))
-    # t_total = int(100 * (args.epochs + checkpoint['epoch'] + 250))
-    # optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
-    # image_model.load_state_dict(checkpoint['model_state_dict'])
-    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
     t_total = int(100 * args.epochs)
     optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total, schedule='warmup_cosine')
     
@@ -270,21 +264,15 @@ if __name__ == "__main__":
             # Learn representations of images and examples
             hint_tokens = hint_tokens.to(device)
             attention_masks = attention_masks.to(device)
-            # image_rep = image_model(image)
-            # examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-            # examples_rep_mean = torch.mean(examples_rep, dim=1)
+            image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
+            examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
 
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
-            # score = scorer_model.score(examples_rep_mean, image_rep)
-            support_scores = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-            query_scores = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
-            combined_scores = torch.cat((support_scores, query_scores), dim=0)
-            combined_labels = torch.cat((torch.ones(support_scores.shape[0]).to(device), label), dim=0)
-            pred_loss = cross_entropy(combined_scores, combined_labels.float())
+            score = scorer_model.score(examples_rep, image_rep)
 
-            # pred_loss = F.binary_cross_entropy_with_logits(
-            #     score, label.float())
+            pred_loss = F.binary_cross_entropy_with_logits(
+                score, label.float())
 
             loss = pred_loss
             loss_total += loss.item()
@@ -337,20 +325,15 @@ if __name__ == "__main__":
                 label_np = label.astype(np.uint8)
                 batch_size = len(image)
 
-                # image_rep = image_model(image)
 
                 hint_tokens = hint_tokens.to(device)
                 attention_masks = attention_masks.to(device)
-                
-                # examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-                # examples_rep_mean = torch.mean(examples_rep, dim=1) 
-                
-                query_scores = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
-                
+
+                image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks) # Adding language during testing                
+                examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
                 # Compare image directly to example rep
-                # score = scorer_model.score(examples_rep_mean, image_rep)
-                # label_hat = score > 0
-                label_hat = torch.argmax(query_scores, dim=1)
+                score = scorer_model.score(examples_rep, image_rep)
+                label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
                 accuracy = accuracy_score(label_np, label_hat)
                 precision = precision_score(label_np, label_hat, zero_division=0)
@@ -375,59 +358,6 @@ if __name__ == "__main__":
     tre_comp_fn = TRE_COMP_FNS[args.tre_comp]()
     tre_err_fn = TRE_ERR_FNS[args.tre_err]()
 
-    def eval_tre(epoch, split='train'):
-        image_model.eval()
-        scorer_model.eval()
-        if args.infer_hyp:
-            # If predicting hyp only, ignore encode/decode models for eval
-            proposal_model.eval()
-            hint_model.eval()
-            if args.multimodal_concept:
-                multimodal_model.eval()
-
-        data_loader = data_loader_dict[split]
-
-        all_reps = []
-        all_feats = []
-        with torch.no_grad():
-            for examples, image, label, hint_seq, hint_length, *rest in data_loader:
-                examples = examples.to(device)
-                image = image.to(device)
-                label = label.to(device)
-                batch_size = len(image)
-                n_examples = examples.shape[1]
-
-                # Extract hint features
-                hint_text = data_loader.dataset.to_text(hint_seq)
-                hint_feats = [tuple(e) for e in extract_features(hint_text)]
-                # TODO: Enable eval by concept vs img
-                # Extend x4
-                hint_feats = [h for h in hint_feats for _ in range(4)]
-                all_feats.extend(hint_feats)
-
-                # Learn image reps
-                examples_2d = examples.view(batch_size * n_examples,
-                                            *examples.shape[2:])
-                examples_2d_rep = image_model(examples_2d)
-                all_reps.append(examples_2d_rep)
-        # Combine representations
-        all_reps = torch.cat(all_reps, 0)
-        all_feats, all_feats_mask, vocab = combine_feats(all_feats)
-        all_feats = all_feats.to(all_reps.device)
-        all_feats_mask = all_feats_mask.to(all_reps.device)
-        tres = tre(all_reps,
-                   all_feats,
-                   all_feats_mask,
-                   vocab,
-                   tre_comp_fn,
-                   tre_err_fn,
-                   quiet=True)
-        tres_mean = np.mean(tres)
-        tres_std = np.std(tres)
-        print('====> {:>12}\tEpoch: {:>3}\tTRE: {:.4f} ± {:.4f}'.format(
-            '({})'.format(split), epoch, tres_mean,
-            1.96 * tres_std / np.sqrt(len(tres))))
-        return np.mean(tres), np.std(tres)
 
     best_epoch = 0
     best_epoch_acc = 0
@@ -461,8 +391,7 @@ if __name__ == "__main__":
             train_dataset.augment = True
         train_acc, _, train_prec, train_reca, *_ = test(epoch, 'train', hint_rep_dict)
         val_acc, _, val_prec, val_reca, *_ = test(epoch, 'val', hint_rep_dict)
-        # Evaluate tre on validation set
-        #  val_tre, val_tre_std = eval_tre(epoch, 'val')
+      
         val_tre, val_tre_std = 0.0, 0.0
 
         test_acc, test_raw_scores, test_prec, test_reca, \

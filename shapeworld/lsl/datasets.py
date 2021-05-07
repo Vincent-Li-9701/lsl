@@ -15,7 +15,7 @@ from utils import next_random, OrderedCounter
 from transformers import LxmertTokenizerFast
 tokenizer = LxmertTokenizerFast.from_pretrained('unc-nlp/lxmert-base-uncased')
 # Set your data directory here!
-DATA_DIR = '/home/songlin/'
+DATA_DIR = '/home/svli97/'
 SPLIT_OPTIONS = ['train', 'val', 'test', 'val_same', 'test_same']
 
 logging.getLogger(__name__).setLevel(logging.INFO)
