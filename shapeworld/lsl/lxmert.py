@@ -27,12 +27,12 @@ class Lxmert(nn.Module):
         if input_ids is None:
             input_ids = torch.tensor([[101, 102] for _ in range(visual_feats.shape[0])]).reshape((visual_feats.shape[0], -1)).cuda()
             attention_mask = torch.tensor([[0, 0] for _ in range(visual_feats.shape[0])]).reshape((visual_feats.shape[0], -1)).cuda()
-      
+        
         if visual_pos is None:
             if len(visual_feats.shape) > 2:
                 visual_pos = torch.tensor([[0,0], [0,1], [0,2], [0,3]]).repeat(visual_feats.shape[0], 1, 1).cuda().float()
             else:
-                visual_pos = torch.tensor([1,0]).repeat(visual_feats.shape[0], 1).cuda().float()
+                visual_pos = torch.tensor([[1,0]]).repeat(visual_feats.shape[0], 1, 1).cuda().float()
                 visual_feats = torch.unsqueeze(visual_feats, dim=1)
         
         if self.pretrained:
@@ -43,7 +43,7 @@ class Lxmert(nn.Module):
         # return self.seq_relationship(out)
         out = torch.mean(out, dim=1) # use when using vision_output
         out = nn.functional.normalize(out, dim=-1)
-       
+
         return out
     
 
