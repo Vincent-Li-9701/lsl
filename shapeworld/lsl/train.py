@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 9408, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 9408, 5, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -263,12 +263,15 @@ if __name__ == "__main__":
             # Learn representations of images and examples
             hint_tokens = hint_tokens.to(device)
             attention_masks = attention_masks.to(device)
-            image_rep = image_model(image)
-            examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-            examples_rep_mean = torch.mean(examples_rep, dim=1)
+            #image_rep = image_model(image)
+            #examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks, use_visual=False)
+            #examples_rep_mean = torch.mean(examples_rep, dim=1)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
-            score = scorer_model.score(examples_rep_mean, image_rep)
+            #score = scorer_model.score(examples_rep_mean, image_rep)
+            score = image_model(examples, image, input_ids=hint_tokens, attention_mask=attention_masks)
+            score = score.reshape(score.shape[0])
+            
             pred_loss = F.binary_cross_entropy_with_logits(
                 score, label.float())
 
@@ -323,14 +326,16 @@ if __name__ == "__main__":
                 label_np = label.astype(np.uint8)
                 batch_size = len(image)
 
-                image_rep = image_model(image)
+                #image_rep = image_model(image)
 
                 hint_tokens = hint_tokens.to(device)
                 attention_masks = attention_masks.to(device)
-                examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-                examples_rep_mean = torch.mean(examples_rep, dim=1) 
+                #examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks, use_visual=False)
+                #examples_rep_mean = torch.mean(examples_rep, dim=1) 
                 # Compare image directly to example rep
-                score = scorer_model.score(examples_rep_mean, image_rep)
+                #score = scorer_model.score(examples_rep_mean, image_rep)
+                score = image_model(examples, image, input_ids=hint_tokens, attention_mask=attention_masks)
+                score = score.reshape(score.shape[0])
                 label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
                 accuracy = accuracy_score(label_np, label_hat)
@@ -433,7 +438,7 @@ if __name__ == "__main__":
     hint_rep_dict = None
     for epoch in range(1, args.epochs + 1):
         train_loss = train(epoch)
-        if epoch % 10 != 1 :
+        if epoch % 10 != 1 or epoch < 150:
             continue
         # storing seen concepts' hint representations
         if args.hint_retriever:
