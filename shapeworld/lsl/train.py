@@ -264,17 +264,13 @@ if __name__ == "__main__":
             # Learn representations of images and examples
             hint_tokens = hint_tokens.to(device)
             attention_masks = attention_masks.to(device)
-            image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
-            examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-
+            
+            concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
-            score = scorer_model.score(examples_rep, image_rep)
 
-            pred_loss = F.binary_cross_entropy_with_logits(
-                score, label.float())
-
-            loss = pred_loss
+            loss = cross_entropy(score, label)
             loss_total += loss.item()
 
             optimizer.zero_grad()
@@ -329,11 +325,10 @@ if __name__ == "__main__":
                 hint_tokens = hint_tokens.to(device)
                 attention_masks = attention_masks.to(device)
 
-                image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks) # Adding language during testing                
-                examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
+                concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
                 # Compare image directly to example rep
-                score = scorer_model.score(examples_rep, image_rep)
-                label_hat = score > 0
+                label_hat = torch.argmax(score, dim=1)
                 label_hat = label_hat.cpu().numpy()
                 accuracy = accuracy_score(label_np, label_hat)
                 precision = precision_score(label_np, label_hat, zero_division=0)

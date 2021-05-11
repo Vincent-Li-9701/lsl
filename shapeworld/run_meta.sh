@@ -1,12 +1,12 @@
 #!/bin/bash
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=4 python -u lsl/train.py --cuda \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=9 python -u lsl/train.py --cuda \
     --batch_size 72 \
     --seed $RANDOM \
-    --lr 1e-5 \
-    --warmup_ratio 0.05 \
+    --lr 5e-6 \
+    --warmup_ratio 0.10 \
     --initializer_range 0.02 \
-    --epochs 501 \
+    --epochs 1401 \
     --backbone lxmert \
     --optimizer bertadam \
-    exp/meta #> vision_output_feat_fast_long.out
+    exp/meta #> classification_head_fast_long_support_mean.out
