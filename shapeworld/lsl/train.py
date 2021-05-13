@@ -228,7 +228,7 @@ if __name__ == "__main__":
     }[args.optimizer]
 
     t_total = int(100 * args.epochs)
-    optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total, schedule='warmup_cosine')
+    optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
     
     # initialize weight and bias
     #wandb.init(project='lsl', entity='bhy070418s')

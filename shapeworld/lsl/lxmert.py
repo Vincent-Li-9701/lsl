@@ -19,7 +19,8 @@ class Lxmert(nn.Module):
             self.lxmert = LxmertModel(config)
 
         # classification head for matching task
-        self.out_bn = nn.BatchNorm1d(5)
+        self.support_out_bn = nn.BatchNorm1d(config.hidden_size)
+        self.query_out_bn = nn.BatchNorm1d(config.hidden_size)
         self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
         self.dropout = nn.Dropout(p=0.2)
         
@@ -38,12 +39,13 @@ class Lxmert(nn.Module):
         else:
             out = self.lxmert(input_ids, visual_feats, visual_pos, attention_mask=attention_mask).vision_output
         
-        out = self.out_bn(out)
         support_out = torch.squeeze(torch.mean(out[:, :4], dim=1)) # the first 4 outputs of vision encoder corresponds to support image
         query_out = out[:, 4] # the last output of vision encoder corresponds to query image 
+        support_out = self.support_out_bn(support_out)
+        query_out = self.query_out_bn(query_out)
         concat_out = torch.cat((support_out, query_out), dim=1)
 
-        return self.dropout(self.seq_relationship(concat_out))
+        return self.seq_relationship(self.dropout(concat_out))
     
 
 def init_lxmert(vocab_size, hidden_size, visual_feat_dim, visual_pos_dim):
