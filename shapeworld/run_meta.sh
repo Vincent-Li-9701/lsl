@@ -1,5 +1,11 @@
 #!/bin/bash
 
+if [ "$#" -eq 1 ]; then
+    name="--name $1"
+else
+    name=""
+fi
+
 TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=3 python -u lsl/train.py --cuda \
     --batch_size 72 \
     --seed $RANDOM \
@@ -9,4 +15,5 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=3 python -u lsl/train.py --cud
     --epochs 450 \
     --backbone lxmert \
     --optimizer bertadam \
+    --wandb $name \
     exp/meta > classification_head_small_support_mean_linear.out

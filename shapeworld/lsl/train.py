@@ -8,7 +8,6 @@ from tqdm import tqdm
 from collections import defaultdict
 from sklearn.metrics import accuracy_score, recall_score, precision_score
 from torchtext.data.metrics import bleu_score
-import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -229,14 +228,16 @@ if __name__ == "__main__":
 
     t_total = int(100 * args.epochs)
     optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
-    
-    # initialize weight and bias
-    #wandb.init(project='lsl', entity='bhy070418s')
-    wandb.init(project='easton_dev', entity='lsl')
-    config = wandb.config
-    config.learning_rate = args.lr
 
-    wandb.watch(image_model)
+    # initialize weight and bias
+    if args.wandb:
+        import wandb
+        wandb.init(project='easton_dev', entity='lsl')
+        if args.name is not None:
+            wandb.run.name = args.name
+        wandb.config = args
+
+        wandb.watch(image_model)
 
     cross_entropy = nn.CrossEntropyLoss()
     def train(epoch, n_steps=100):
@@ -398,11 +399,12 @@ if __name__ == "__main__":
             test_same_acc = test_acc
             all_test_raw_scores = test_raw_scores
 
-        wandb.log({"loss": train_loss, 'train_acc': train_acc, 'train_prec': train_prec, 'train_reca': train_reca,\
-            'val_same_acc': val_same_acc, 'val_same_prec': val_same_prec, 'val_same_reca': val_same_reca,\
-            'val_acc': val_acc,'val_prec': val_prec, 'val_reca': val_reca,\
-            'test_same_acc': test_same_acc, 'test_same_prec': test_same_prec, 'test_same_reca': test_same_reca,\
-            'test_acc': test_acc, 'test_prec': test_prec, 'test_reca': test_reca})
+        if args.wandb:
+            wandb.log({"loss": train_loss, 'train_acc': train_acc, 'train_prec': train_prec, 'train_reca': train_reca,\
+                'val_same_acc': val_same_acc, 'val_same_prec': val_same_prec, 'val_same_reca': val_same_reca,\
+                'val_acc': val_acc,'val_prec': val_prec, 'val_reca': val_reca,\
+                'test_same_acc': test_same_acc, 'test_same_prec': test_same_prec, 'test_same_reca': test_same_reca,\
+                'test_acc': test_acc, 'test_prec': test_prec, 'test_reca': test_reca})
         
         # Compute confidence intervals
         n_test = len(all_test_raw_scores)
