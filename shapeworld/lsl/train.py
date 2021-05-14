@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 516, 4608, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -310,11 +310,8 @@ if __name__ == "__main__":
         data_loader = data_loader_dict[split]
 
         with torch.no_grad():
-            idx = 0
             for examples, image, label, hint_tokens, attention_masks  in data_loader:
-                if idx > len(data_loader) // 2:
-                    break
-                idx += 1
+                
                 examples = examples.to(device)
                 image = image.to(device)
                 label = label.numpy()

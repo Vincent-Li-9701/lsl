@@ -22,7 +22,7 @@ class Lxmert(nn.Module):
         self.support_out_bn = nn.BatchNorm1d(config.hidden_size)
         self.query_out_bn = nn.BatchNorm1d(config.hidden_size)
         self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
-        self.dropout = nn.Dropout(p=0.2)
+        self.dropout = nn.Dropout(p=0.5)
         
 
     def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None):
