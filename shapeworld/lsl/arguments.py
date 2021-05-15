@@ -162,6 +162,14 @@ class ArgumentParser:
             '--plot_bleu_score',
             action='store_true',
             help='Use scheduled samping during training')
+        parser.add_argument(
+            '--name',
+            default=None,
+            help='Wandb experiment name')
+        parser.add_argument(
+            '--wandb',
+            action='store_true',
+            help='Enable wandb')
 
 
     def parse_args(self):
