@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 516, 4608, 2, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 

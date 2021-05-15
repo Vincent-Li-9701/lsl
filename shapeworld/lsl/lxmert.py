@@ -19,10 +19,9 @@ class Lxmert(nn.Module):
             self.lxmert = LxmertModel(config)
 
         # classification head for matching task
-        self.support_out_bn = nn.BatchNorm1d(config.hidden_size)
-        self.query_out_bn = nn.BatchNorm1d(config.hidden_size)
+        self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=False, track_running_stats=False)
+        self.query_out_bn = nn.BatchNorm1d(config.hidden_size, affine=False, track_running_stats=False)
         self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
-        self.dropout = nn.Dropout(p=0.5)
         
 
     def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None):
@@ -45,7 +44,7 @@ class Lxmert(nn.Module):
         query_out = self.query_out_bn(query_out)
         concat_out = torch.cat((support_out, query_out), dim=1)
 
-        return self.seq_relationship(self.dropout(concat_out))
+        return self.seq_relationship(concat_out)
     
 
 def init_lxmert(vocab_size, hidden_size, visual_feat_dim, visual_pos_dim):
