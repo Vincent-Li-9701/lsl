@@ -227,7 +227,7 @@ if __name__ == "__main__":
     }[args.optimizer]
 
     t_total = int(100 * args.epochs)
-    optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total)
+    optimizer = optfunc(params_to_optimize, lr=args.lr, warmup=args.warmup_ratio, t_total=t_total, schedule=args.lr_schedule)
 
     # initialize weight and bias
     if args.wandb:
@@ -240,6 +240,7 @@ if __name__ == "__main__":
         wandb.watch(image_model)
 
     cross_entropy = nn.CrossEntropyLoss()
+    setting = 'lng_only'
     def train(epoch, n_steps=100):
         image_model.train()
         scorer_model.train()
@@ -266,7 +267,10 @@ if __name__ == "__main__":
             hint_tokens = hint_tokens.to(device)
             attention_masks = attention_masks.to(device)
             
-            concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+            if setting == 'lng_only':
+                concat_images = torch.unsqueeze(image, dim=1) # torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+            else:
+                concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
             score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
@@ -323,8 +327,11 @@ if __name__ == "__main__":
                 hint_tokens = hint_tokens.to(device)
                 attention_masks = attention_masks.to(device)
 
-                concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
+                if setting == 'lng_only':
+                    concat_images = torch.unsqueeze(image, dim=1)
+                else:
+                    concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+                    score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
                 # Compare image directly to example rep
                 label_hat = torch.argmax(score, dim=1)
                 label_hat = label_hat.cpu().numpy()
