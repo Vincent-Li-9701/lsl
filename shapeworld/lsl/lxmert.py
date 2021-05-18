@@ -20,12 +20,12 @@ class Lxmert(nn.Module):
             self.lxmert = LxmertModel(config)
 
         # classification head for matching task
-        self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
         self.query_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
         if setting == 'lng_only':
             self.seq_relationship = nn.Linear(config.hidden_size, 2)
             self.visual_pos = [[1,0]]
         else:
+            self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
             self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
             self.visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
 
@@ -36,14 +36,14 @@ class Lxmert(nn.Module):
             attention_mask = torch.tensor([[0, 0] for _ in range(visual_feats.shape[0])]).reshape((visual_feats.shape[0], -1)).cuda()
         
         if visual_pos is None: # pre-defined visual positional encoding
-            visual_pos = torch.tensor(self.visual_pos)).repeat(visual_feats.shape[0], 1, 1).cuda().float()
+            visual_pos = torch.tensor(self.visual_pos).repeat(visual_feats.shape[0], 1, 1).cuda().float()
 
         if self.pretrained:
             out = self.lxmert(input_ids, self.visual_proj(visual_feats), visual_pos, attention_mask=attention_mask).vision_output
         else:
             out = self.lxmert(input_ids, visual_feats, visual_pos, attention_mask=attention_mask).vision_output
         
-        if self.setting = 'lng_only':
+        if self.setting == 'lng_only':
             concat_out = self.query_out_bn(out[:, -1])
         else:
             support_out = torch.squeeze(torch.mean(out[:, :4], dim=1)) # the first 4 outputs of vision encoder corresponds to support image
@@ -51,7 +51,6 @@ class Lxmert(nn.Module):
             support_out = self.support_out_bn(support_out)
             query_out = self.query_out_bn(query_out)
             concat_out = torch.cat((support_out, query_out), dim=1)
-
         return self.seq_relationship(concat_out)
     
 

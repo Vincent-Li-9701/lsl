@@ -331,7 +331,7 @@ if __name__ == "__main__":
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                    score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
+                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
                 # Compare image directly to example rep
                 label_hat = torch.argmax(score, dim=1)
                 label_hat = label_hat.cpu().numpy()
