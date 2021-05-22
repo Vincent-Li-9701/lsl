@@ -22,12 +22,10 @@ class Lxmert(nn.Module):
         self.query_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
         if setting == 'lng_only':
             self.seq_relationship = nn.Linear(config.hidden_size, 2)
-            self.visual_pos = [[1,0]]
         else:
             # self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
             # self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
             self.seq_relationship = nn.Linear(config.hidden_size, 2)
-            self.visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
 
     def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None, setting=None):
         
@@ -37,11 +35,11 @@ class Lxmert(nn.Module):
         
         if visual_pos is None: # pre-defined visual positional encoding
             if setting == 'lng_only':
-                self.visual_pos = [[1,0]]
+                visual_pos = [[1,0]]
             else:
-                self.visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
+                visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
 
-            visual_pos = torch.tensor(self.visual_pos).repeat(visual_feats.shape[0], 1, 1).cuda().float()
+            visual_pos = torch.tensor(visual_pos).repeat(visual_feats.shape[0], 1, 1).cuda().float()
 
         if self.pretrained:
             out = self.lxmert(input_ids, self.visual_proj(visual_feats), visual_pos, attention_mask=attention_mask).vision_output
