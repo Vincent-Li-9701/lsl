@@ -240,7 +240,8 @@ if __name__ == "__main__":
         wandb.watch(image_model)
 
     cross_entropy = nn.CrossEntropyLoss()
-    setting = 'lng_only'
+    settings = ['lng_only']
+    import random
     def train(epoch, n_steps=100):
         image_model.train()
         scorer_model.train()
@@ -262,16 +263,21 @@ if __name__ == "__main__":
             label = label.to(device)
             batch_size = len(image)
             n_ex = examples.shape[1]
-
-            # Learn representations of images and examples
-            hint_tokens = hint_tokens.to(device)
-            attention_masks = attention_masks.to(device)
             
+            setting = random.choice(settings)
+            # Learn representations of images and examples
+            if setting == 'meta':
+                hint_tokens = None
+                attention_masks = None
+            else:
+                hint_tokens = hint_tokens.to(device)
+                attention_masks = attention_masks.to(device)
+
             if setting == 'lng_only':
-                concat_images = torch.unsqueeze(image, dim=1) # torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
+                concat_images = torch.unsqueeze(image, dim=1)
             else:
                 concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
+            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
 
@@ -294,7 +300,7 @@ if __name__ == "__main__":
 
         return loss_total
 
-    def test(epoch, split='train', hint_rep_dict=None):
+    def test(epoch, split='train', hint_rep_dict=None, setting=None):
         image_model.eval()
         scorer_model.eval()
         if args.infer_hyp:
@@ -323,15 +329,18 @@ if __name__ == "__main__":
                 label_np = label.astype(np.uint8)
                 batch_size = len(image)
 
-
-                hint_tokens = hint_tokens.to(device)
-                attention_masks = attention_masks.to(device)
+                if setting == 'meta':
+                    hint_tokens = None
+                    attention_masks = None
+                else:
+                    hint_tokens = hint_tokens.to(device)
+                    attention_masks = attention_masks.to(device)
 
                 if setting == 'lng_only':
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks)
+                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
                 # Compare image directly to example rep
                 label_hat = torch.argmax(score, dim=1)
                 label_hat = label_hat.cpu().numpy()
@@ -380,6 +389,8 @@ if __name__ == "__main__":
 
     save_defaultdict_to_fs(vars(args), os.path.join(args.exp_dir, 'args.json'))
     hint_rep_dict = None
+
+    args.test_setting = 'meta'
     for epoch in range(1, args.epochs + 1):
         train_loss = train(epoch)
         if epoch % 10 != 1 :
@@ -389,17 +400,18 @@ if __name__ == "__main__":
             train_dataset.augment = False # this is not gonna work if there are multiple workers
             hint_rep_dict = construct_dict(train_loader, image_model, hint_model)
             train_dataset.augment = True
-        train_acc, _, train_prec, train_reca, *_ = test(epoch, 'train', hint_rep_dict)
-        val_acc, _, val_prec, val_reca, *_ = test(epoch, 'val', hint_rep_dict)
+        train_acc, _, train_prec, train_reca, *_ = test(epoch, 'train', hint_rep_dict, args.test_setting)
+        val_acc, _, val_prec, val_reca, *_ = test(epoch, 'val', hint_rep_dict, args.test_setting)
       
         val_tre, val_tre_std = 0.0, 0.0
 
         test_acc, test_raw_scores, test_prec, test_reca, \
-            test_bleu_n1, test_bleu_n2, test_bleu_n3, test_bleu_n4 = test(epoch, 'test', hint_rep_dict)
+            test_bleu_n1, test_bleu_n2, test_bleu_n3, test_bleu_n4 = test(epoch, 'test', hint_rep_dict, args.test_setting)
         if has_same:
-            val_same_acc, _, val_same_prec, val_same_reca, *_ = test(epoch, 'val_same', hint_rep_dict)
+            val_same_acc, _, val_same_prec, val_same_reca, *_ = test(epoch, 'val_same', hint_rep_dict, args.test_setting)
             test_same_acc, test_same_raw_scores, test_same_prec, test_same_reca,\
-                test_same_bleu_n1, test_same_bleu_n2, test_same_bleu_n3, test_same_bleu_n4 = test(epoch, 'test_same', hint_rep_dict)    
+                test_same_bleu_n1, test_same_bleu_n2, test_same_bleu_n3, test_same_bleu_n4 = test(epoch, 'test_same', \
+                hint_rep_dict, args.test_setting)    
             all_test_raw_scores = test_raw_scores + test_same_raw_scores
         else:
             val_same_acc = val_acc

@@ -9,7 +9,6 @@ class Lxmert(nn.Module):
     def __init__(self, vocab_size, hidden_size, visual_feat_dim, visual_pos_dim, initializer_range, pretrained=False, patch_num = 16, setting='lng_only'):
         super().__init__()
         self.pretrained = pretrained
-        self.setting = setting
         if self.pretrained:
             self.visual_proj = nn.Linear(visual_feat_dim, 2048)
             self.lxmert = LxmertModel.from_pretrained('unc-nlp/lxmert-base-uncased')
@@ -25,17 +24,23 @@ class Lxmert(nn.Module):
             self.seq_relationship = nn.Linear(config.hidden_size, 2)
             self.visual_pos = [[1,0]]
         else:
-            self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
-            self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
+            # self.support_out_bn = nn.BatchNorm1d(config.hidden_size, affine=True, track_running_stats=False)
+            # self.seq_relationship = nn.Linear(config.hidden_size * 2, 2)
+            self.seq_relationship = nn.Linear(config.hidden_size, 2)
             self.visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
 
-    def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None):
+    def forward(self, visual_feats, visual_pos=None, input_ids=None, attention_mask=None, setting=None):
         
         if input_ids is None: # dummpy input sequences
             input_ids = torch.tensor([[101, 102] for _ in range(visual_feats.shape[0])]).reshape((visual_feats.shape[0], -1)).cuda()
             attention_mask = torch.tensor([[0, 0] for _ in range(visual_feats.shape[0])]).reshape((visual_feats.shape[0], -1)).cuda()
         
         if visual_pos is None: # pre-defined visual positional encoding
+            if setting == 'lng_only':
+                self.visual_pos = [[1,0]]
+            else:
+                self.visual_pos = [[0,0], [0,1], [0,2], [0,3], [1,0]]
+
             visual_pos = torch.tensor(self.visual_pos).repeat(visual_feats.shape[0], 1, 1).cuda().float()
 
         if self.pretrained:
@@ -43,14 +48,15 @@ class Lxmert(nn.Module):
         else:
             out = self.lxmert(input_ids, visual_feats, visual_pos, attention_mask=attention_mask).vision_output
         
-        if self.setting == 'lng_only':
+        if setting == 'lng_only':
             concat_out = self.query_out_bn(out[:, -1])
         else:
-            support_out = torch.squeeze(torch.mean(out[:, :4], dim=1)) # the first 4 outputs of vision encoder corresponds to support image
-            query_out = out[:, 4] # the last output of vision encoder corresponds to query image 
-            support_out = self.support_out_bn(support_out)
-            query_out = self.query_out_bn(query_out)
-            concat_out = torch.cat((support_out, query_out), dim=1)
+            # support_out = torch.squeeze(torch.mean(out[:, :4], dim=1)) # the first 4 outputs of vision encoder corresponds to support image
+            # query_out = out[:, 4] # the last output of vision encoder corresponds to query image 
+            # support_out = self.support_out_bn(support_out)
+            # query_out = self.query_out_bn(query_out)
+            concat_out = self.query_out_bn(out[:, -1])
+            # concat_out = torch.cat((support_out, query_out), dim=1)
         return self.seq_relationship(concat_out)
     
 
