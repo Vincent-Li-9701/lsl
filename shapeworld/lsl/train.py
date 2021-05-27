@@ -240,7 +240,7 @@ if __name__ == "__main__":
         wandb.watch(image_model)
 
     cross_entropy = nn.CrossEntropyLoss()
-    settings = ['lng_only']
+    settings = ['lng_only' ,'meta']   
     import random
     def train(epoch, n_steps=100):
         image_model.train()
@@ -446,7 +446,7 @@ if __name__ == "__main__":
                 'epoch': epoch,
                 'model_state_dict': image_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-            }, "./best_model.pt")
+            }, "./{}_best_model.pt".format(args.name))
             best_epoch = epoch
             best_epoch_acc = epoch_acc
             best_val_acc = val_acc
