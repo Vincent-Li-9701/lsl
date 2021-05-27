@@ -112,6 +112,9 @@ class ArgumentParser:
                             type=float,
                             default=0.02,
                             help='The std of the truncated_normal_initializer for initializing all weights')
+        parser.add_argument('--lr_schedule',
+                            default='warmup_linear',
+                            choices=['warmup_cosine','warmup_constant','warmup_linear'])
         parser.add_argument('--tre_err',
                             default='cos',
                             choices=['cos', 'l1', 'l2'],
@@ -162,6 +165,14 @@ class ArgumentParser:
             '--plot_bleu_score',
             action='store_true',
             help='Use scheduled samping during training')
+        parser.add_argument(
+            '--name',
+            default=None,
+            help='Wandb experiment name')
+        parser.add_argument(
+            '--wandb',
+            action='store_true',
+            help='Enable wandb')
 
 
     def parse_args(self):

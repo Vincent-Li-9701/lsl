@@ -8,3 +8,4 @@ sync_results.sh
 *copy.*
 **/wandb/*
 *.pt
+*.t7
