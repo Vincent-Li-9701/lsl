@@ -22,11 +22,9 @@ from utils import (
 
 from arguments import ArgumentParser
 from bertadam import BertAdam
-from datasets import ShapeWorld, extract_features
-from datasets import SOS_TOKEN, EOS_TOKEN, PAD_TOKEN
+from datasets import ShapeWorld
 from lxmert import Lxmert
 from models import ImageRep, TextRep, TextProposal, ExWrapper
-from models import MultimodalRep,MultimodalDeepRep
 from models import DotPScorer, BilinearScorer
 from vision import Conv4NP, ResNet18
 from tre import AddComp, MulComp, CosDist, L1Dist, L2Dist, tre
@@ -94,13 +92,6 @@ if __name__ == "__main__":
         language_filter=args.language_filter,
         shuffle_words=args.shuffle_words,
         shuffle_captions=args.shuffle_captions)
-    train_vocab = train_dataset.vocab
-    train_vocab_size = train_dataset.vocab_size
-    train_max_length = train_dataset.max_length
-    train_w2i, train_i2w = train_vocab['w2i'], train_vocab['i2w']
-    pad_index = train_w2i[PAD_TOKEN]
-    sos_index = train_w2i[SOS_TOKEN]
-    eos_index = train_w2i[EOS_TOKEN]
     test_class_noise_weight = 0.0
     if args.noise_at_test:
         test_noise = args.noise
@@ -108,7 +99,7 @@ if __name__ == "__main__":
         test_noise = 0.0
     val_dataset = ShapeWorld(split='val',
                              precomputed_features=precomputed_features,
-                             vocab=train_vocab,
+                             vocab=None,
                              preprocess=preprocess,
                              noise=test_noise,
                              class_noise_weight=0.0,
@@ -116,7 +107,7 @@ if __name__ == "__main__":
                              data_dir=args.data_dir)
     test_dataset = ShapeWorld(split='test',
                               precomputed_features=precomputed_features,
-                              vocab=train_vocab,
+                              vocab=None,
                               preprocess=preprocess,
                               noise=test_noise,
                               class_noise_weight=0.0,
@@ -126,7 +117,7 @@ if __name__ == "__main__":
         val_same_dataset = ShapeWorld(
             split='val_same',
             precomputed_features=precomputed_features,
-            vocab=train_vocab,
+            vocab=None,
             preprocess=preprocess,
             noise=test_noise,
             class_noise_weight=0.0,
@@ -135,7 +126,7 @@ if __name__ == "__main__":
         test_same_dataset = ShapeWorld(
             split='test_same',
             precomputed_features=precomputed_features,
-            vocab=train_vocab,
+            vocab=None,
             preprocess=preprocess,
             noise=test_noise,
             class_noise_weight=0.0,
@@ -174,7 +165,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 9408, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 3072, 4, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -199,26 +190,6 @@ if __name__ == "__main__":
     scorer_model = scorer_model.to(device)
     params_to_optimize.extend(scorer_model.parameters())
 
-    if args.use_hyp:
-        embedding_model = nn.Embedding(train_vocab_size, 512)
-
-    if args.decode_hyp:
-        proposal_model = TextProposal(embedding_model, hidden_size=512)
-        proposal_model = proposal_model.to(device)
-        params_to_optimize.extend(proposal_model.parameters())
-
-    if args.encode_hyp:
-        if args.hint_retriever:
-            hint_model = TextRep(embedding_model, hidden_size=512, retrieve_mode=True)
-        else:
-            hint_model = TextRep(embedding_model, hidden_size=512)
-        hint_model = hint_model.to(device)
-        params_to_optimize.extend(hint_model.parameters())
-
-    if args.multimodal_concept:
-        multimodal_model = MultimodalDeepRep()
-        multimodal_model = multimodal_model.to(device)
-        params_to_optimize.extend(multimodal_model.parameters())
 
     optfunc = {
         'adam': optim.Adam,
@@ -237,7 +208,10 @@ if __name__ == "__main__":
     config.learning_rate = args.lr
 
     wandb.watch(image_model)
-
+    
+    import random
+    train_settings = ['lsl']
+    test_settings = ['lsl']
     def train(epoch, n_steps=100):
         image_model.train()
         scorer_model.train()
@@ -257,18 +231,21 @@ if __name__ == "__main__":
             examples = examples.to(device)
             image = image.to(device)
             label = label.to(device)
-            batch_size = len(image)
-            n_ex = examples.shape[1]
 
             # Learn representations of images and examples
-            hint_tokens = hint_tokens.to(device)
-            attention_masks = attention_masks.to(device)
-            image_rep = image_model(image)
+            setting = random.choice(train_settings)
+            if setting == 'meta':
+                hint_tokens = None
+                attention_masks = None
+            else:
+                hint_tokens = hint_tokens.to(device)
+                attention_masks = attention_masks.to(device)
+            image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
             examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-            examples_rep_mean = torch.mean(examples_rep, dim=1)
+            examples_rep = torch.mean(examples_rep, dim=1)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
-            score = scorer_model.score(examples_rep_mean, image_rep)
+            score = scorer_model.score(examples_rep, image_rep)
             pred_loss = F.binary_cross_entropy_with_logits(
                 score, label.float())
 
@@ -325,12 +302,18 @@ if __name__ == "__main__":
 
                 image_rep = image_model(image)
 
-                hint_tokens = hint_tokens.to(device)
-                attention_masks = attention_masks.to(device)
+                setting = random.choice(test_settings)
+                if setting == 'meta':
+                    hint_tokens = None
+                    attention_masks = None
+                else:
+                    hint_tokens = hint_tokens.to(device)
+                    attention_masks = attention_masks.to(device)
+                
                 examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
-                examples_rep_mean = torch.mean(examples_rep, dim=1) 
+                examples_rep = torch.mean(examples_rep, dim=1) 
                 # Compare image directly to example rep
-                score = scorer_model.score(examples_rep_mean, image_rep)
+                score = scorer_model.score(examples_rep, image_rep)
                 label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
                 accuracy = accuracy_score(label_np, label_hat)
@@ -353,62 +336,7 @@ if __name__ == "__main__":
         return accuracy_meter.avg, accuracy_meter.raw_scores, precision_meter.avg, recall_meter.avg, \
             bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg
 
-    tre_comp_fn = TRE_COMP_FNS[args.tre_comp]()
-    tre_err_fn = TRE_ERR_FNS[args.tre_err]()
 
-    def eval_tre(epoch, split='train'):
-        image_model.eval()
-        scorer_model.eval()
-        if args.infer_hyp:
-            # If predicting hyp only, ignore encode/decode models for eval
-            proposal_model.eval()
-            hint_model.eval()
-            if args.multimodal_concept:
-                multimodal_model.eval()
-
-        data_loader = data_loader_dict[split]
-
-        all_reps = []
-        all_feats = []
-        with torch.no_grad():
-            for examples, image, label, hint_seq, hint_length, *rest in data_loader:
-                examples = examples.to(device)
-                image = image.to(device)
-                label = label.to(device)
-                batch_size = len(image)
-                n_examples = examples.shape[1]
-
-                # Extract hint features
-                hint_text = data_loader.dataset.to_text(hint_seq)
-                hint_feats = [tuple(e) for e in extract_features(hint_text)]
-                # TODO: Enable eval by concept vs img
-                # Extend x4
-                hint_feats = [h for h in hint_feats for _ in range(4)]
-                all_feats.extend(hint_feats)
-
-                # Learn image reps
-                examples_2d = examples.view(batch_size * n_examples,
-                                            *examples.shape[2:])
-                examples_2d_rep = image_model(examples_2d)
-                all_reps.append(examples_2d_rep)
-        # Combine representations
-        all_reps = torch.cat(all_reps, 0)
-        all_feats, all_feats_mask, vocab = combine_feats(all_feats)
-        all_feats = all_feats.to(all_reps.device)
-        all_feats_mask = all_feats_mask.to(all_reps.device)
-        tres = tre(all_reps,
-                   all_feats,
-                   all_feats_mask,
-                   vocab,
-                   tre_comp_fn,
-                   tre_err_fn,
-                   quiet=True)
-        tres_mean = np.mean(tres)
-        tres_std = np.std(tres)
-        print('====> {:>12}\tEpoch: {:>3}\tTRE: {:.4f} ± {:.4f}'.format(
-            '({})'.format(split), epoch, tres_mean,
-            1.96 * tres_std / np.sqrt(len(tres))))
-        return np.mean(tres), np.std(tres)
 
     best_epoch = 0
     best_epoch_acc = 0

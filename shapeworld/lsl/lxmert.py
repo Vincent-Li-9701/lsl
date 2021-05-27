@@ -2,11 +2,11 @@ from transformers import LxmertConfig, LxmertModel, LxmertTokenizer
 import torch
 import torch.nn as nn
 from einops import rearrange
-PATCH_SIZE = 56
+PATCH_SIZE = 32
 
 class Lxmert(nn.Module):
 
-    def __init__(self, vocab_size, hidden_size, visual_feat_dim, visual_pos_dim, initializer_range, pretrained=False, patch_num = 16):
+    def __init__(self, vocab_size, hidden_size, visual_feat_dim, visual_pos_dim, initializer_range, pretrained=False):
         super().__init__()
         self.pretrained = pretrained
         if self.pretrained:
@@ -29,22 +29,23 @@ class Lxmert(nn.Module):
         
         if len(visual_feats.shape) > 4:
             original_shape = visual_feats.shape
-            visual_patches = rearrange(visual_feats, 'b k c (h p1) (w p2) -> (b k) (h w) (p1 p2 c)', p1 = PATCH_SIZE, p2 = PATCH_SIZE)
+            visual_feats = rearrange(visual_feats, 'b k c (h p1) (w p2) -> (b k) (h w) (p1 p2 c)', p1 = PATCH_SIZE, p2 = PATCH_SIZE)
         elif len(visual_feats.shape) == 4:
-            visual_patches = rearrange(visual_feats, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = PATCH_SIZE, p2 = PATCH_SIZE)
+            visual_feats = rearrange(visual_feats, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = PATCH_SIZE, p2 = PATCH_SIZE)
         if input_ids != None:
-            if len(visual_feats.shape) > 4:
+            if original_shape:
                 input_ids = torch.repeat_interleave(input_ids, original_shape[1], dim=0)
                 attention_mask = torch.repeat_interleave(attention_mask, original_shape[1], dim=0)
         else:
-            input_ids = torch.tensor([[101, 102] for _ in range(visual_patches.shape[0])]).reshape((visual_patches.shape[0], -1)).cuda()
-      
+            input_ids = torch.tensor([101, 102]).repeat(visual_feats.shape[0], 1, 1).reshape((visual_feats.shape[0], -1)).cuda()
+            attention_mask = torch.tensor([0, 0]).repeat(visual_feats.shape[0], 1, 1).reshape((visual_feats.shape[0], -1)).cuda()
+        
         if visual_pos is None:
-            visual_pos = self.gen_visual_pos(visual_patches.shape[0], visual_patches.shape[1])
+            visual_pos = self.gen_visual_pos(visual_feats.shape[0], visual_feats.shape[1])
         if self.pretrained:
-            out = self.lxmert(input_ids, self.visual_proj(visual_patches), visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
+            out = self.lxmert(input_ids, self.visual_proj(visual_feats), visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
         else:
-            out = self.lxmert(input_ids, visual_patches, visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
+            out = self.lxmert(input_ids, visual_feats, visual_pos, attention_mask=attention_mask).vision_output#.pooled_output
         out = torch.mean(out, dim=1)
         
         out = nn.functional.normalize(out, dim=-1)

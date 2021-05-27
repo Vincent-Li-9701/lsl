@@ -15,7 +15,7 @@ from utils import next_random, OrderedCounter
 from transformers import LxmertTokenizerFast
 tokenizer = LxmertTokenizerFast.from_pretrained('unc-nlp/lxmert-base-uncased')
 # Set your data directory here!
-DATA_DIR = '/data3/qinziyue/lsl/shapeworld/'
+DATA_DIR = '/home/songlin/'
 SPLIT_OPTIONS = ['train', 'val', 'test', 'val_same', 'test_same']
 
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -194,13 +194,6 @@ class ShapeWorld(data.Dataset):
             raise RuntimeError("Can't find {}".format(split_dir))
 
         self.precomputed_features = precomputed_features
-        if self.precomputed_features:
-            in_features_name = 'inputs.feats.npz'
-            ex_features_name = 'examples.feats.npz'
-        else:
-            in_features_name = 'inputs.npz'
-            ex_features_name = 'examples.npz'
-
         self.preprocess = None
         if preprocess:
             self.preprocess = transforms.Compose([
@@ -210,6 +203,17 @@ class ShapeWorld(data.Dataset):
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
             ])
+        
+        if self.precomputed_features:
+            in_features_name = 'inputs.feats.npz'
+            ex_features_name = 'examples.feats.npz'
+        elif self.preprocess:
+            in_features_name = 'inputs.prep.npz'
+            ex_features_name = 'examples.prep.npz'
+        else:
+            in_features_name = 'inputs.npz'
+            ex_features_name = 'examples.npz'
+
         # hints = language
         # examples = images with positive labels (pre-training)
         # input = test time input
@@ -237,7 +241,7 @@ class ShapeWorld(data.Dataset):
                 #  else:  # XXX: What?/
                 #  assert a != b, (a, b, label)
 
-        if not self.precomputed_features:
+        if not (self.precomputed_features or self.preprocess):
             # Bring channel to first dim
             in_features = np.transpose(in_features, (0, 3, 1, 2))
             ex_features = np.transpose(ex_features, (0, 1, 4, 2, 3))
@@ -250,28 +254,16 @@ class ShapeWorld(data.Dataset):
 
         n_data = len(hints)
 
-        self.in_features = in_features
-        self.ex_features = ex_features
+        # if self.preprocess:
+        #     in_features = self.process(in_features)
+        #     # np.savez(os.path.join(split_dir, 'inputs.prep.npz'), self.in_features)
+        #     ex_features = self.process(ex_features)
+        #     # np.savez(os.path.join(split_dir, 'examples.prep.npz'), self.ex_features)
+
         self.hints = hints
         hint_token_results = tokenizer(self.hints, padding=True) 
         hint_tokens = np.array(hint_token_results['input_ids'])
         attention_masks = np.array(hint_token_results['attention_mask'])
-        if self.vocab is None:
-            self.create_vocab(hints, test_hints)
-
-        self.w2i, self.i2w = self.vocab['w2i'], self.vocab['i2w']
-        self.vocab_size = len(self.w2i)
-
-        # Language processing
-        self.language_filter = language_filter
-        if self.language_filter is not None:
-            assert self.language_filter in ['color', 'nocolor']
-        self.shuffle_words = shuffle_words
-        self.shuffle_captions = shuffle_captions
-
-        # this is the maximum number of tokens in a sentence
-        max_length = get_max_hint_length(data_dir)
-
 
         data = []
         for i in range(n_data):
@@ -279,37 +271,17 @@ class ShapeWorld(data.Dataset):
             data.append(data_i)
 
         self.data = data
-        self.max_length = max_length
-
-
-    def create_vocab(self, hints, test_hints):
-        w2i = dict()
-        i2w = dict()
-        w2c = OrderedCounter()
-
-        special_tokens = [PAD_TOKEN, SOS_TOKEN, EOS_TOKEN, UNK_TOKEN]
-        for st in special_tokens:
-            i2w[len(w2i)] = st
-            w2i[st] = len(w2i)
-
-        for hint in hints:
-            hint_tokens = hint.split()
-            w2c.update(hint_tokens)
-
-        if test_hints is not None:
-            for hint in test_hints:
-                hint_tokens = hint.split()
-                w2c.update(hint_tokens)
-
-        for w, c in list(w2c.items()):
-            i2w[len(w2i)] = w
-            w2i[w] = len(w2i)
-
-        assert len(w2i) == len(i2w)
-        vocab = dict(w2i=w2i, i2w=i2w)
-        self.vocab = vocab
-
-        logging.info('Created vocab with %d words.' % len(w2c))
+    
+    def process(self, features):
+        out = []
+        for images in features:
+            images = torch.from_numpy(images).float()
+            if len(images.shape) > 3:
+                out.append(torch.stack([self.preprocess(e) for e in images]))
+            else:
+                out.append(self.preprocess(images))
+        
+        return np.stack(out)
 
     def __len__(self):
         return len(self.data)
@@ -345,103 +317,6 @@ class ShapeWorld(data.Dataset):
 
         return (batch_examples, batch_image, batch_label,  batch_hint_tokens, batch_attention_masks)
 
-    def add_fixed_noise_colors(self,
-                               support,
-                               query,
-                               support_hint,
-                               query_hint,
-                               clamp=False):
-        # Get hashable version of support/query hint
-        support_hash = tuple(support_hint.numpy().tolist())
-        query_hash = tuple(query_hint.numpy().tolist())
-        # Identify black parts of background image
-        # Class noise depends on support and query hints
-        support_class_noise = self.class_noises[support_hash]
-        query_class_noise = self.class_noises[query_hash]
-
-        # Random noise for instances
-        support_instance_noise = self.class_noises.random_noise(
-            support.shape[0])
-        query_instance_noise = self.class_noises.random_noise(1)
-
-        # Add dimensions to noise
-        support_class_noise = support_class_noise.unsqueeze(0).unsqueeze(
-            2).unsqueeze(3).expand_as(support)
-        query_class_noise = query_class_noise.unsqueeze(1).unsqueeze(
-            2).expand_as(query)
-        # BG color fixed for each image, so no need to unsqueeze along image dim
-        support_instance_noise = support_instance_noise.unsqueeze(2).unsqueeze(
-            3).expand_as(support)
-        query_instance_noise = query_instance_noise.unsqueeze(1).unsqueeze(
-            2).expand_as(query)
-
-        # Get mask of black pixels
-        support_mask = get_black_mask(support).float()
-        query_mask = get_black_mask(query).float()
-
-        # Combine class vs query noise
-        support_noise = (self.class_noise_weight * support_class_noise) + (
-            (1 - self.class_noise_weight) * support_instance_noise)
-        query_noise = (self.class_noise_weight * query_class_noise) + (
-            (1 - self.class_noise_weight) * query_instance_noise)
-
-        # Fill in black pixels with random color
-        support_noised = (
-            (1 - support_mask) * support) + (support_mask * support_noise)
-        query_noised = ((1 - query_mask) * query) + (query_mask * query_noise)
-
-        return support_noised, query_noised
-
-    def add_noise(self, support, query, y, clamp=False):
-        # Fixed pos/neg class noise
-        support_class_noise = self.class_noises[1]
-        query_class_noise = self.class_noises[y]
-
-        return self._add_noise(support,
-                               query,
-                               support_class_noise,
-                               query_class_noise,
-                               clamp=clamp)
-
-    def _add_noise(self,
-                   support,
-                   query,
-                   support_class_noise,
-                   query_class_noise,
-                   clamp=False):
-        # Expand to match examples
-        support_class_noise = support_class_noise.unsqueeze(0).expand_as(
-            support)
-        # Instance noise
-        if self.noise == 0:
-            support_instance_noise = torch.zeros(*support.shape, dtype=torch.float)
-            query_instance_noise = torch.zeros(*query.shape, dtype=torch.float)
-        elif self.noise_type == 'gaussian':
-            support_instance_noise = torch.FloatTensor(*support.shape).normal_(
-                0, self.noise)
-            query_instance_noise = torch.FloatTensor(*query.shape).normal_(
-                0, self.noise)
-        else:
-            support_instance_noise = torch.FloatTensor(
-                *support.shape).uniform_(-self.noise, self.noise)
-            query_instance_noise = torch.FloatTensor(*query.shape).uniform_(
-                -self.noise, self.noise)
-
-        # Compute weighted noise
-        query_noise = (self.class_noise_weight * query_class_noise) + (
-            (1 - self.class_noise_weight) * query_instance_noise)
-        support_noise = (self.class_noise_weight * support_class_noise) + (
-            (1 - self.class_noise_weight) * support_instance_noise)
-
-        support_noised = support + support_noise
-        query_noised = query + query_noise
-
-        # Add to expands
-        if clamp:
-            support_noised = torch.clamp(support_noised, 0.0, 1.0)
-            query_noised = torch.clamp(query_noised, 0.0, 1.0)
-
-        return support_noised, query_noised
 
     def __getitem__(self, index):
         if self.split == 'train' and self.augment:
@@ -473,10 +348,6 @@ class ShapeWorld(data.Dataset):
                     feats = examples2[swap, ...]
 
                 feats = torch.from_numpy(feats).float()
-                if self.preprocess is not None:
-                    feats = self.preprocess(feats)
-                    examples = torch.stack(
-                        [self.preprocess(e) for e in examples])
                 return examples, feats, 0, hint_token, attention_mask
             else:  # sample_label == 1
                 swap = random.randint((N_EX + 1 if label == 1 else N_EX))
@@ -500,10 +371,6 @@ class ShapeWorld(data.Dataset):
                 # assume the query hint matches the support hint.
                 feats = feats.float()
 
-                if self.preprocess is not None:
-                    feats = self.preprocess(feats)
-                    examples = torch.stack(
-                        [self.preprocess(e) for e in examples])
                 return examples, feats, 1, hint_token, attention_mask
 
         else:  # val, val_same, test, test_same
@@ -518,9 +385,6 @@ class ShapeWorld(data.Dataset):
             hint_token = torch.from_numpy(hint_token)
             attention_mask = torch.from_numpy(attention_mask)
 
-            if self.preprocess is not None:
-                image = self.preprocess(image)
-                examples = torch.stack([self.preprocess(e) for e in examples])
 
             return examples, image, label, hint_token, attention_mask
 
@@ -538,40 +402,3 @@ class ShapeWorld(data.Dataset):
 
         return texts
 
-
-def extract_features(hints):
-    """
-    Extract features from hints
-    """
-    all_feats = []
-    for hint in hints:
-        feats = []
-        for maybe_rel in ['above', 'below', 'left', 'right']:
-            if maybe_rel in hint:
-                rel = maybe_rel
-                rel_idx = hint.index(rel)
-                break
-        else:
-            raise RuntimeError("Didn't find relation: {}".format(hint))
-        # Add relation
-        feats.append('rel:{}'.format(rel))
-        fst, snd = hint[:rel_idx], hint[rel_idx:]
-        # fst: [<sos>, a, ..., is]
-        fst_shape = fst[2:fst.index('is')]
-        # snd: [..., a, ..., ., <eos>]
-        try:
-            snd_shape = snd[snd.index('a') + 1:-2]
-        except ValueError:
-            # Use "an"
-            snd_shape = snd[snd.index('an') + 1:-2]
-
-        for name, fragment in [('fst', fst_shape), ('snd', snd_shape)]:
-            for feat in fragment:
-                if feat != 'shape':
-                    if feat in COLORS:
-                        feats.append('{}:color:{}'.format(name, feat))
-                    else:
-                        assert feat in SHAPES, hint
-                        feats.append('{}:shape:{}'.format(name, feat))
-        all_feats.append(feats)
-    return all_feats
