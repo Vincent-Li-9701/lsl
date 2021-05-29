@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
+from torch.distributions import Categorical
 
 from utils import (
     AverageMeter,
@@ -75,8 +76,8 @@ if __name__ == "__main__":
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     # train dataset will return (image, label, hint_input, hint_target, hint_length)
-    precomputed_features = True # args.backbone == 'vgg16_fixed' TODO
-    preprocess = False # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
+    precomputed_features = False # args.backbone == 'vgg16_fixed' TODO
+    preprocess = True # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
     train_dataset = ShapeWorld(
         split='train',
         vocab=None,
@@ -173,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 12288, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -239,8 +240,7 @@ if __name__ == "__main__":
 
         wandb.watch(image_model)
 
-    cross_entropy = nn.CrossEntropyLoss()
-    settings = ['lng_only' ,'meta']   
+    settings = ['meta', 'lsl']   
     import random
     def train(epoch, n_steps=100):
         image_model.train()
@@ -277,11 +277,11 @@ if __name__ == "__main__":
                 concat_images = torch.unsqueeze(image, dim=1)
             else:
                 concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
+            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
 
-            loss = cross_entropy(score, label)
+            loss = F.binary_cross_entropy_with_logits(score[:,-1], label.float()) # F.mse_loss(score[:,-1], label.float())  
             loss_total += loss.item()
 
             optimizer.zero_grad()
@@ -314,6 +314,7 @@ if __name__ == "__main__":
         precision_meter = AverageMeter(raw=True)
         recall_meter = AverageMeter(raw=True)
         retrival_acc_meter = AverageMeter(raw=True)
+        entropy_meter = AverageMeter(raw=True)
         bleu_meter_n1 = AverageMeter(raw=True)
         bleu_meter_n2 = AverageMeter(raw=True)
         bleu_meter_n3 = AverageMeter(raw=True)
@@ -340,10 +341,12 @@ if __name__ == "__main__":
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
+                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
                 # Compare image directly to example rep
-                label_hat = torch.argmax(score, dim=1)
+                label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
+                logits = torch.sigmoid(score)
+                entropy = Categorical(probs=torch.cat([logits, 1 - logits], dim=-1)).entropy().mean()
                 accuracy = accuracy_score(label_np, label_hat)
                 precision = precision_score(label_np, label_hat, zero_division=0)
                 recall = recall_score(label_np, label_hat, zero_division=0)
@@ -356,11 +359,15 @@ if __name__ == "__main__":
                 recall_meter.update(recall,
                                       batch_size,
                                       raw_scores=[recall])
-
+                entropy_meter.update(entropy,
+                                      batch_size,
+                                      raw_scores=[entropy])
         print('====> {:>12}\tEpoch: {:>3}\tAccuracy: {:.4f}\tPrecision: {:.4f}\tRecall: {:.4f}\
-            \tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\tRetrieval Accuracy: {:.4f}'.format(
+        \tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\
+        \tRetrieval Accuracy: {:.4f} \tEntropy : {:.4f}'.format(
             '({})'.format(split), epoch, accuracy_meter.avg, precision_meter.avg, recall_meter.avg, \
-                bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, retrival_acc_meter.avg))
+                bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, \
+                retrival_acc_meter.avg, entropy_meter.avg))
         return accuracy_meter.avg, accuracy_meter.raw_scores, precision_meter.avg, recall_meter.avg, \
             bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg
 

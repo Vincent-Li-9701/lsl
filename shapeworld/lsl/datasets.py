@@ -201,15 +201,6 @@ class ShapeWorld(data.Dataset):
             in_features_name = 'inputs.npz'
             ex_features_name = 'examples.npz'
 
-        self.preprocess = None
-        if preprocess:
-            self.preprocess = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-            ])
         # hints = language
         # examples = images with positive labels (pre-training)
         # input = test time input
@@ -241,6 +232,15 @@ class ShapeWorld(data.Dataset):
             # Bring channel to first dim
             in_features = np.transpose(in_features, (0, 3, 1, 2))
             ex_features = np.transpose(ex_features, (0, 1, 4, 2, 3))
+        
+        self.preprocess = None
+        if preprocess:
+            in_features = torch.from_numpy(in_features)
+            ex_features = torch.from_numpy(ex_features)
+            self.preprocess = transforms.Compose([
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+            ])
 
         if self.max_size is not None:
             labels = labels[:self.max_size]
@@ -250,10 +250,7 @@ class ShapeWorld(data.Dataset):
 
         n_data = len(hints)
 
-        self.in_features = in_features
-        self.ex_features = ex_features
-        self.hints = hints
-        hint_token_results = tokenizer(self.hints, padding=True) 
+        hint_token_results = tokenizer(hints, padding=True) 
         hint_tokens = np.array(hint_token_results['input_ids'])
         attention_masks = np.array(hint_token_results['attention_mask'])
         if self.vocab is None:
@@ -275,7 +272,13 @@ class ShapeWorld(data.Dataset):
 
         data = []
         for i in range(n_data):
-            data_i = (ex_features[i], in_features[i], labels[i], hint_tokens[i], attention_masks[i])
+            if preprocess:
+                feats = self.preprocess(in_features[i])
+                examples = torch.stack(
+                    [self.preprocess(e) for e in ex_features[i]])
+                data_i = (examples, feats, labels[i], hint_tokens[i], attention_masks[i])
+            else:
+                data_i = (ex_features[i], in_features[i], labels[i], hint_tokens[i], attention_masks[i])
             data.append(data_i)
 
         self.data = data
@@ -448,7 +451,7 @@ class ShapeWorld(data.Dataset):
             # tie a language to a concept; convert to pytorch.
             hint_token = torch.from_numpy(hint_token)
             attention_mask = torch.from_numpy(attention_mask)
-            examples = torch.clone(torch.from_numpy(examples)).float()
+            examples = torch.clone(examples).float()
 
             # in training, pick whether to show positive or negative example.
             sample_label = random.randint(2)
@@ -469,17 +472,14 @@ class ShapeWorld(data.Dataset):
                 else:
                     feats = examples2[swap, ...]
 
-                feats = torch.from_numpy(feats).float()
-                if self.preprocess is not None:
-                    feats = self.preprocess(feats)
-                    examples = torch.stack(
-                        [self.preprocess(e) for e in examples])
+                feats = feats.float()
+                
                 return examples, feats, 0, hint_token, attention_mask
             else:  # sample_label == 1
                 swap = random.randint((N_EX + 1 if label == 1 else N_EX))
                 # pick either an example or an image.
                 
-                image = torch.clone(torch.from_numpy(image))
+                image = torch.clone(image)
 
                 if swap == N_EX:
                     feats = image
@@ -497,10 +497,6 @@ class ShapeWorld(data.Dataset):
                 # assume the query hint matches the support hint.
                 feats = feats.float()
 
-                if self.preprocess is not None:
-                    feats = self.preprocess(feats)
-                    examples = torch.stack(
-                        [self.preprocess(e) for e in examples])
                 return examples, feats, 1, hint_token, attention_mask
 
         else:  # val, val_same, test, test_same
@@ -508,16 +504,12 @@ class ShapeWorld(data.Dataset):
                 index]
 
             # no fancy stuff. just return image.
-            image = torch.from_numpy(image).float()
+            image = image.float()
 
             # NOTE: we provide the oracle text.
-            examples = torch.from_numpy(examples).float()
+            examples = examples.float()
             hint_token = torch.from_numpy(hint_token)
             attention_mask = torch.from_numpy(attention_mask)
-
-            if self.preprocess is not None:
-                image = self.preprocess(image)
-                examples = torch.stack([self.preprocess(e) for e in examples])
 
             return examples, image, label, hint_token, attention_mask
 
