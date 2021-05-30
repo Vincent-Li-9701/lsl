@@ -76,8 +76,8 @@ if __name__ == "__main__":
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     # train dataset will return (image, label, hint_input, hint_target, hint_length)
-    precomputed_features = False # args.backbone == 'vgg16_fixed' TODO
-    preprocess = True # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
+    precomputed_features = True # args.backbone == 'vgg16_fixed' TODO
+    preprocess = False # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
     train_dataset = ShapeWorld(
         split='train',
         vocab=None,
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 768, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -240,7 +240,7 @@ if __name__ == "__main__":
 
         wandb.watch(image_model)
 
-    settings = ['meta', 'lsl']   
+    settings = ['meta']   
     import random
     def train(epoch, n_steps=100):
         image_model.train()
@@ -252,7 +252,8 @@ if __name__ == "__main__":
         if args.multimodal_concept:
             multimodal_model.train()
 
-        loss_total = 0
+        sq_loss_total = 0
+        lq_loss_total = 0
         pbar = tqdm(total=n_steps)
         for batch_idx in range(n_steps):
             examples, image, label, hint_tokens, attention_masks = \
@@ -277,28 +278,39 @@ if __name__ == "__main__":
                 concat_images = torch.unsqueeze(image, dim=1)
             else:
                 concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
+            
+            sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
 
-            loss = F.binary_cross_entropy_with_logits(score[:,-1], label.float()) # F.mse_loss(score[:,-1], label.float())  
-            loss_total += loss.item()
-
             optimizer.zero_grad()
-            loss.backward()
+            sq_loss = 0
+            if setting != 'lng_only':
+                sq_loss = F.binary_cross_entropy_with_logits(sq_score[:,-1], label.float())
+                sq_loss.backward(retain_graph=True) #TODO: fixed this taking too long
+                sq_loss = sq_loss.item()
+                sq_loss_total += sq_loss
+
+            lq_loss = 0
+            if setting != 'meta':
+                lq_loss = F.binary_cross_entropy_with_logits(lq_score[:,-1], label.float())
+                lq_loss.backward()
+                lq_loss = lq_loss.item()
+                lq_loss_total += lq_loss
+
             optimizer.step()
 
             if batch_idx % args.log_interval == 0:
-                pbar.set_description('Epoch {} Loss: {:.6f}'.format(
-                    epoch, loss.item()))
+                pbar.set_description('Epoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
+                    epoch, sq_loss, lq_loss))
                 pbar.refresh()
 
             pbar.update()
         pbar.close()
-        print('====> {:>12}\tEpoch: {:>3}\tLoss: {:.4f}'.format(
-            '(train)', epoch, loss_total))
+        print('====> {:>12}\tEpoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
+            '(train)', epoch, sq_loss_total, lq_loss_total))
 
-        return loss_total
+        return sq_loss_total + lq_loss_total
 
     def test(epoch, split='train', hint_rep_dict=None, setting=None):
         image_model.eval()
@@ -341,8 +353,13 @@ if __name__ == "__main__":
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
+                sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
                 # Compare image directly to example rep
+                if setting == 'lng_only':
+                    score = lq_score
+                else:
+                    score = sq_score
+                
                 label_hat = score > 0
                 label_hat = label_hat.cpu().numpy()
                 logits = torch.sigmoid(score)
