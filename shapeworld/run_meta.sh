@@ -6,7 +6,7 @@ else
     name=""
 fi
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=3 python -u lsl/train.py --cuda \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=1 python -u lsl/train.py --cuda \
     --batch_size 100 \
     --seed $RANDOM \
     --lr 5e-6 \
@@ -16,4 +16,4 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=3 python -u lsl/train.py --cud
     --backbone lxmert \
     --optimizer bertadam \
     --wandb $name \
-    exp/meta > rnd_meta+lng_trn_meta_test_small_embed_vscls.out #rnd_meta+lng_trn_meta_test_iden_embed.out
+    exp/meta #> rnd_meta+lng_trn_meta_test_small_embed_vscls.out 
