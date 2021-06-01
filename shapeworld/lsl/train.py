@@ -76,8 +76,8 @@ if __name__ == "__main__":
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     # train dataset will return (image, label, hint_input, hint_target, hint_length)
-    precomputed_features = False # args.backbone == 'vgg16_fixed' TODO
-    preprocess = True # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
+    precomputed_features = True # args.backbone == 'vgg16_fixed' TODO
+    preprocess = False # args.backbone == 'resnet18' or args.backbone == 'lxmert' TODO
     train_dataset = ShapeWorld(
         split='train',
         vocab=None,
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     elif args.backbone == 'resnet18':
         backbone_model = ResNet18()
     elif args.backbone == 'lxmert':
-        backbone_model = Lxmert(30522, 768, 768, 4, args.initializer_range, pretrained=False)
+        backbone_model = Lxmert(30522, 768, 4608, 2, args.initializer_range, pretrained=False)
     else:
         raise NotImplementedError(args.backbone)
 
@@ -240,7 +240,7 @@ if __name__ == "__main__":
 
         wandb.watch(image_model)
 
-    settings = ['meta', 'lsl']   
+    settings = ['meta', 'lng_only']
     import random
     def train(epoch, n_steps=100):
         image_model.train()
@@ -277,11 +277,20 @@ if __name__ == "__main__":
                 concat_images = torch.unsqueeze(image, dim=1)
             else:
                 concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
+            sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
 
-            loss = F.binary_cross_entropy_with_logits(score[:,-1], label.float()) # F.mse_loss(score[:,-1], label.float())  
+            loss = None
+            if setting != 'lng_only':
+                loss = F.binary_cross_entropy_with_logits(sq_score[:, -1], label.float())
+
+            if setting != 'meta':
+                if loss is not None:
+                    loss += F.binary_cross_entropy_with_logits(lq_score[:, -1], label.float())
+                else:
+                    loss = F.binary_cross_entropy_with_logits(lq_score[:, -1], label.float())
+            
             loss_total += loss.item()
 
             optimizer.zero_grad()
@@ -341,9 +350,14 @@ if __name__ == "__main__":
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting, preprocess=preprocess)
+                sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
+                
+                if setting != 'lng_only':
+                    score = sq_score
+                else:
+                    score = lq_score
                 # Compare image directly to example rep
-                label_hat = score > 0
+                label_hat = torch.squeeze(score) > 0
                 label_hat = label_hat.cpu().numpy()
                 logits = torch.sigmoid(score)
                 entropy = Categorical(probs=torch.cat([logits, 1 - logits], dim=-1)).entropy().mean()
