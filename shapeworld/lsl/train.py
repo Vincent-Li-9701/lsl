@@ -252,7 +252,8 @@ if __name__ == "__main__":
         if args.multimodal_concept:
             multimodal_model.train()
 
-        loss_total = 0
+        sq_loss_total = 0
+        lq_loss_total = 0
         pbar = tqdm(total=n_steps)
         for batch_idx in range(n_steps):
             examples, image, label, hint_tokens, attention_masks = \
@@ -298,16 +299,16 @@ if __name__ == "__main__":
             optimizer.step()
 
             if batch_idx % args.log_interval == 0:
-                pbar.set_description('Epoch {} Loss: {:.6f}'.format(
-                    epoch, loss.item()))
+                pbar.set_description('Epoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
+                    epoch, sq_loss, lq_loss))
                 pbar.refresh()
 
             pbar.update()
         pbar.close()
-        print('====> {:>12}\tEpoch: {:>3}\tLoss: {:.4f}'.format(
-            '(train)', epoch, loss_total))
+        print('====> {:>12}\tEpoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
+            '(train)', epoch, sq_loss_total, lq_loss_total))
 
-        return loss_total
+        return sq_loss_total + lq_loss_total
 
     def test(epoch, split='train', hint_rep_dict=None, setting=None):
         image_model.eval()

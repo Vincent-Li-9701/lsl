@@ -234,9 +234,9 @@ class ShapeWorld(data.Dataset):
             ex_features = np.transpose(ex_features, (0, 1, 4, 2, 3))
         
         self.preprocess = None
+        in_features = torch.from_numpy(in_features)
+        ex_features = torch.from_numpy(ex_features)
         if preprocess:
-            in_features = torch.from_numpy(in_features)
-            ex_features = torch.from_numpy(ex_features)
             self.preprocess = transforms.Compose([
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
