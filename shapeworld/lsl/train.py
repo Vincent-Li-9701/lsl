@@ -239,7 +239,7 @@ if __name__ == "__main__":
 
         wandb.watch(image_model)
 
-    settings = ['meta']
+    settings = ['meta', 'lng_only']
     import random
     def train(epoch, n_steps=100):
         image_model.train()
