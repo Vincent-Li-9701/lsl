@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
-from torch.distributions import Categorical
 
 from utils import (
     AverageMeter,
@@ -240,7 +239,7 @@ if __name__ == "__main__":
 
         wandb.watch(image_model)
 
-    settings = ['meta']   
+    settings = ['meta']
     import random
     def train(epoch, n_steps=100):
         image_model.train()
@@ -252,8 +251,7 @@ if __name__ == "__main__":
         if args.multimodal_concept:
             multimodal_model.train()
 
-        sq_loss_total = 0
-        lq_loss_total = 0
+        loss_total = 0
         pbar = tqdm(total=n_steps)
         for batch_idx in range(n_steps):
             examples, image, label, hint_tokens, attention_masks = \
@@ -278,39 +276,28 @@ if __name__ == "__main__":
                 concat_images = torch.unsqueeze(image, dim=1)
             else:
                 concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-            
-            sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
+            score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
             # Use concept to compute prediction loss
             # (how well does example repr match image repr)?
 
+            loss = F.binary_cross_entropy_with_logits(score[:, -1], label.float())
+            loss_total += loss.item()
+
             optimizer.zero_grad()
-            sq_loss = 0
-            if setting != 'lng_only':
-                sq_loss = F.binary_cross_entropy_with_logits(sq_score[:,-1], label.float())
-                sq_loss.backward(retain_graph=True) #TODO: fixed this taking too long
-                sq_loss = sq_loss.item()
-                sq_loss_total += sq_loss
-
-            lq_loss = 0
-            if setting != 'meta':
-                lq_loss = F.binary_cross_entropy_with_logits(lq_score[:,-1], label.float())
-                lq_loss.backward()
-                lq_loss = lq_loss.item()
-                lq_loss_total += lq_loss
-
+            loss.backward()
             optimizer.step()
 
             if batch_idx % args.log_interval == 0:
-                pbar.set_description('Epoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
-                    epoch, sq_loss, lq_loss))
+                pbar.set_description('Epoch {} Loss: {:.6f}'.format(
+                    epoch, loss.item()))
                 pbar.refresh()
 
             pbar.update()
         pbar.close()
-        print('====> {:>12}\tEpoch {} sq_loss: {:.6f} lq_loss: {:.6f}'.format(
-            '(train)', epoch, sq_loss_total, lq_loss_total))
+        print('====> {:>12}\tEpoch: {:>3}\tLoss: {:.4f}'.format(
+            '(train)', epoch, loss_total))
 
-        return sq_loss_total + lq_loss_total
+        return loss_total
 
     def test(epoch, split='train', hint_rep_dict=None, setting=None):
         image_model.eval()
@@ -326,7 +313,6 @@ if __name__ == "__main__":
         precision_meter = AverageMeter(raw=True)
         recall_meter = AverageMeter(raw=True)
         retrival_acc_meter = AverageMeter(raw=True)
-        entropy_meter = AverageMeter(raw=True)
         bleu_meter_n1 = AverageMeter(raw=True)
         bleu_meter_n2 = AverageMeter(raw=True)
         bleu_meter_n3 = AverageMeter(raw=True)
@@ -353,17 +339,10 @@ if __name__ == "__main__":
                     concat_images = torch.unsqueeze(image, dim=1)
                 else:
                     concat_images = torch.cat((examples, torch.unsqueeze(image, dim=1)), dim=1)
-                sq_score, lq_score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
+                score = image_model(concat_images, input_ids=hint_tokens, attention_mask=attention_masks, setting=setting)
                 # Compare image directly to example rep
-                if setting == 'lng_only':
-                    score = lq_score
-                else:
-                    score = sq_score
-                
-                label_hat = score > 0
+                label_hat = torch.squeeze(score) > 0
                 label_hat = label_hat.cpu().numpy()
-                logits = torch.sigmoid(score)
-                entropy = Categorical(probs=torch.cat([logits, 1 - logits], dim=-1)).entropy().mean()
                 accuracy = accuracy_score(label_np, label_hat)
                 precision = precision_score(label_np, label_hat, zero_division=0)
                 recall = recall_score(label_np, label_hat, zero_division=0)
@@ -376,15 +355,11 @@ if __name__ == "__main__":
                 recall_meter.update(recall,
                                       batch_size,
                                       raw_scores=[recall])
-                entropy_meter.update(entropy,
-                                      batch_size,
-                                      raw_scores=[entropy])
+
         print('====> {:>12}\tEpoch: {:>3}\tAccuracy: {:.4f}\tPrecision: {:.4f}\tRecall: {:.4f}\
-        \tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\
-        \tRetrieval Accuracy: {:.4f} \tEntropy : {:.4f}'.format(
+            \tBLEU_n1 Score: {:.4f}\tBLEU_n2 Score: {:.4f} \tBLEU_n3 Score: {:.4f}\tBLEU_n4 Score: {:.4f}\tRetrieval Accuracy: {:.4f}'.format(
             '({})'.format(split), epoch, accuracy_meter.avg, precision_meter.avg, recall_meter.avg, \
-                bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, \
-                retrival_acc_meter.avg, entropy_meter.avg))
+                bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg, retrival_acc_meter.avg))
         return accuracy_meter.avg, accuracy_meter.raw_scores, precision_meter.avg, recall_meter.avg, \
             bleu_meter_n1.avg, bleu_meter_n2.avg, bleu_meter_n3.avg, bleu_meter_n4.avg
 
