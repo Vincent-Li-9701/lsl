@@ -240,7 +240,7 @@ if __name__ == "__main__":
             else:
                 hint_tokens = hint_tokens.to(device)
                 attention_masks = attention_masks.to(device)
-            image_rep = image_model(image, input_ids=hint_tokens, attention_mask=attention_masks)
+            image_rep = image_model(image)
             examples_rep = image_model(examples, input_ids=hint_tokens, attention_mask=attention_masks)
             examples_rep = torch.mean(examples_rep, dim=1)
             # Use concept to compute prediction loss

@@ -1,4 +1,4 @@
-from transformers import LxmertConfig, LxmertModel, LxmertTokenizer
+from transformers import LxmertConfig, LxmertModel
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -34,11 +34,13 @@ class Lxmert(nn.Module):
             visual_feats = rearrange(visual_feats, 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = PATCH_SIZE, p2 = PATCH_SIZE)
         if input_ids != None:
             if original_shape:
-                input_ids = torch.repeat_interleave(input_ids, original_shape[1], dim=0)
-                attention_mask = torch.repeat_interleave(attention_mask, original_shape[1], dim=0)
+                input_ids = torch.unsqueeze(input_ids, dim=1).\
+                    expand(original_shape[0], original_shape[1], input_ids.shape[-1]).reshape(-1, input_ids.shape[-1])
+                attention_mask = torch.unsqueeze(attention_mask, dim=1).\
+                    expand(original_shape[0], original_shape[1], input_ids.shape[-1]).reshape(-1, input_ids.shape[-1])
         else:
-            input_ids = torch.tensor([101, 102]).repeat(visual_feats.shape[0], 1, 1).reshape((visual_feats.shape[0], -1)).cuda()
-            attention_mask = torch.tensor([0, 0]).repeat(visual_feats.shape[0], 1, 1).reshape((visual_feats.shape[0], -1)).cuda()
+            input_ids = torch.tensor([101, 102]).expand(visual_feats.shape[0], 2).cuda()
+            attention_mask = torch.tensor([0, 0]).expand(visual_feats.shape[0], 2).cuda()
         
         if visual_pos is None:
             visual_pos = self.gen_visual_pos(visual_feats.shape[0], visual_feats.shape[1])
